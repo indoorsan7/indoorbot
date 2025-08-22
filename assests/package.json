@@ -1,18 +1,24 @@
 {
   "name": "discord-incoin-bot",
   "version": "1.0.0",
-  "description": "A Discord bot for managing in-game currency.",
+  "description": "A Discord bot for managing in-game currency with Firebase.",
   "main": "main.js",
   "type": "module",
   "scripts": {
     "start": "node main.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "discord",
+    "bot",
+    "firebase",
+    "incoin",
+    "currency"
+  ],
+  "author": "Your Name",
   "license": "ISC",
   "dependencies": {
     "discord.js": "^14.15.3",
-    "firebase": "^11.6.1",
-    "http": "^0.0.1-security"
+    "firebase": "^10.12.3",
+    "dotenv": "^16.4.5"
   }
 }
