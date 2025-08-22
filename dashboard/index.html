@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>いんコインデータダッシュボード</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            padding: 1rem;
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .table-header th {
+            padding: 0.75rem 1.5rem;
+            text-align: left;
+            font-weight: 600;
+            color: #4a5568;
+            background-color: #edf2f7;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .table-row td {
+            padding: 0.75rem 1.5rem;
+            border-bottom: 1px solid #e2e8f0;
+            color: #2d3748;
+        }
+        .table-row:last-child td {
+            border-bottom: none;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            font-size: 1.25rem;
+            color: #6366f1;
+        }
+    </style>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-discord-incoin-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db;
+        let auth;
+
+        // Job settings as defined in the Discord bot's main.js for display purposes
+        const jobSettingsData = new Map([
+            ["無職", { display: "1,000 〜 1,500 いんコイン" }],
+            ["Youtuber", { display: "信用ポイント × (500 〜 1,250) または (10 〜 100) いんコイン" }],
+            ["社長", { display: "(400,000 〜 650,000) + (メンバー数 × 30,000) いんコイン" }],
+            ["お肉屋", { display: "2,000 〜 2,500 いんコイン" }],
+            ["魚屋", { display: "4,500 〜 7,500 いんコイン" }],
+            ["レストラン店主", { display: "8,000 〜 10,000 いんコイン" }],
+            ["カフェ店主", { display: "12,000 〜 13,000 いんコイン" }],
+            ["タクシー運転手", { display: "17,500 〜 23,000 いんコイン" }],
+            ["バス運転手", { display: "25,000 〜 30,000 いんコイン" }],
+            ["ホテル支配人", { display: "45,000 〜 60,000 いんコイン" }],
+            ["科学技術者", { display: "70,000 〜 80,000 いんコイン" }],
+            ["公認会計士", { display: "85,000 〜 100,000 いんコイン" }],
+            ["歯科医師", { display: "115,000 〜 130,000 いんコイン" }],
+            ["医者", { display: "140,000 〜 175,000 いんコイン" }],
+            ["航空機操縦士", { display: "150,000 〜 210,000 いんコイン" }]
+        ]);
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!firebaseConfig) {
+                console.error("Firebase config is not available. Cannot initialize Firebase.");
+                document.getElementById('loading').textContent = 'Firebaseの設定が読み込めませんでした。';
+                return;
+            }
+
+            try {
+                const firebaseApp = initializeApp(firebaseConfig);
+                db = getFirestore(firebaseApp);
+                auth = getAuth(firebaseApp);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                    console.log("Firebase authenticated with custom token.");
+                } else {
+                    await signInAnonymously(auth);
+                    console.log("Firebase authenticated anonymously.");
+                }
+
+                await fetchAndDisplayData();
+
+            } catch (error) {
+                console.error("Firebase initialization or authentication failed:", error);
+                document.getElementById('loading').textContent = 'データの読み込み中にエラーが発生しました。';
+            }
+        });
+
+        async function fetchAndDisplayData() {
+            document.getElementById('loading').style.display = 'block';
+
+            try {
+                // Fetch all user data
+                const usersCollectionRef = collection(db, `artifacts/${appId}/public/data/discord_incoin_data`);
+                const usersSnapshot = await getDocs(usersCollectionRef);
+                const allUsers = [];
+                const userNames = new Map(); // To store user IDs and their latest known usernames
+
+                usersSnapshot.forEach(docSnap => {
+                    const userData = docSnap.data();
+                    const userId = docSnap.id;
+
+                    // Ensure basic fields exist for display, providing defaults if missing
+                    const balances = userData.balances || 0;
+                    const bankBalances = userData.bankBalances || 0;
+                    const totalCoins = balances + bankBalances;
+                    const job = userData.job || '無職';
+                    
+                    allUsers.push({
+                        id: userId,
+                        username: userData.username || `ユーザー${userId.substring(0, 5)}`, // Fallback for username
+                        balances: balances,
+                        bankBalances: bankBalances,
+                        totalCoins: totalCoins,
+                        job: job
+                    });
+                    userNames.set(userId, userData.username || `ユーザー${userId.substring(0, 5)}`);
+                });
+
+                // Sort users by totalCoins for ranking
+                allUsers.sort((a, b) => b.totalCoins - a.totalCoins);
+
+                // Populate Ranking Table
+                const rankingTableBody = document.getElementById('ranking-table-body');
+                rankingTableBody.innerHTML = ''; // Clear dummy data
+                allUsers.forEach((user, index) => {
+                    const row = `
+                        <tr class="table-row">
+                            <td>${index + 1}</td>
+                            <td>${user.username}</td>
+                            <td>${user.balances.toLocaleString()}</td>
+                            <td>${user.bankBalances.toLocaleString()}</td>
+                            <td>${user.totalCoins.toLocaleString()}</td>
+                        </tr>
+                    `;
+                    rankingTableBody.innerHTML += row;
+                });
+
+                // Populate Jobs Table
+                const jobsTableBody = document.getElementById('jobs-table-body');
+                jobsTableBody.innerHTML = ''; // Clear dummy data
+                jobSettingsData.forEach((settings, jobName) => {
+                    const row = `
+                        <tr class="table-row">
+                            <td>${jobName}</td>
+                            <td>${settings.display}</td>
+                        </tr>
+                    `;
+                    jobsTableBody.innerHTML += row;
+                });
+
+
+                // Fetch all company data
+                const companiesCollectionRef = collection(db, `artifacts/${appId}/public/data/companies`);
+                const companiesSnapshot = await getDocs(companiesCollectionRef);
+                const allCompanies = [];
+
+                companiesSnapshot.forEach(docSnap => {
+                    const companyData = docSnap.data();
+                    const companyId = docSnap.id;
+
+                    // Ensure basic fields exist, providing defaults if missing
+                    const ownerUsername = userNames.get(companyData.ownerId) || `不明なユーザー (ID: ${companyData.ownerId ? companyData.ownerId.substring(0, 5) : '不明'})`;
+                    const membersCount = companyData.members ? companyData.members.length : 0;
+
+                    allCompanies.push({
+                        id: companyId,
+                        name: companyData.name || '不明な会社',
+                        owner: ownerUsername,
+                        dailySalary: companyData.dailySalary || 0,
+                        budget: companyData.budget || 0,
+                        membersCount: membersCount,
+                        autoDeposit: companyData.autoDeposit ? 'ON' : 'OFF'
+                    });
+                });
+
+                // Populate Companies Table
+                const companiesTableBody = document.getElementById('companies-table-body');
+                companiesTableBody.innerHTML = ''; // Clear dummy data
+                allCompanies.forEach(company => {
+                    const row = `
+                        <tr class="table-row">
+                            <td>${company.name}</td>
+                            <td>${company.owner}</td>
+                            <td>${company.dailySalary.toLocaleString()}</td>
+                            <td>${company.budget.toLocaleString()}</td>
+                            <td>${company.membersCount}</td>
+                            <td>${company.autoDeposit}</td>
+                        </tr>
+                    `;
+                    companiesTableBody.innerHTML += row;
+                });
+
+            } catch (error) {
+                console.error("Error fetching data from Firestore:", error);
+                document.getElementById('loading').textContent = 'データの読み込み中にエラーが発生しました。エラー: ' + error.message;
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 antialiased">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-4xl font-bold text-center text-indigo-700 mb-8 rounded-lg bg-white p-4 shadow-lg">いんコインデータダッシュボード</h1>
+
+        <div id="loading" class="loading">データを読み込み中...</div>
+
+        <!-- 所持金ランキング -->
+        <div class="card">
+            <h2 class="text-2xl font-semibold text-indigo-600 mb-4 pb-2 border-b-2 border-indigo-200">所持金ランキング 🏆</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white rounded-lg overflow-hidden">
+                    <thead>
+                        <tr class="table-header">
+                            <th class="rounded-tl-lg">順位</th>
+                            <th>ユーザー名</th>
+                            <th>所持金</th>
+                            <th>銀行預金</th>
+                            <th class="rounded-tr-lg">合計</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ranking-table-body">
+                        <!-- Data will be loaded here by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 職業の種類 -->
+        <div class="card">
+            <h2 class="text-2xl font-semibold text-indigo-600 mb-4 pb-2 border-b-2 border-indigo-200">職業の種類 💼</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white rounded-lg overflow-hidden">
+                    <thead>
+                        <tr class="table-header">
+                            <th class="rounded-tl-lg">職業名</th>
+                            <th class="rounded-tr-lg">収入範囲</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-table-body">
+                        <!-- Data will be loaded here by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 会社の種類 -->
+        <div class="card">
+            <h2 class="text-2xl font-semibold text-indigo-600 mb-4 pb-2 border-b-2 border-indigo-200">会社の種類 🏢</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white rounded-lg overflow-hidden">
+                    <thead>
+                        <tr class="table-header">
+                            <th class="rounded-tl-lg">会社名</th>
+                            <th>オーナー</th>
+                            <th>日給</th>
+                            <th>予算</th>
+                            <th>メンバー数</th>
+                            <th class="rounded-tr-lg">自動入金</th>
+                        </tr>
+                    </thead>
+                    <tbody id="companies-table-body">
+                        <!-- Data will be loaded here by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
