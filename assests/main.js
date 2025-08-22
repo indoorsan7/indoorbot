@@ -7,7 +7,6 @@ import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } fro
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-// DISCORD_CLIENT_SECRET は現在使用されていないため、削除しました。
 
 // Webサーバーの起動（Renderのヘルスチェック用）
 const server = http.createServer((req, res) => {
@@ -1873,7 +1872,7 @@ const companyCommand = {
                     { name: '/company join <会社名>', value: '指定した会社に参加します。毎日日給が支払われます。', inline: false },
                     { name: '/company info [会社名]', value: '自分の所属する会社、または指定した会社の情報を表示します。', inline: false },
                     { name: '/company leave', value: '所属している会社を辞めます。(社長以外)', inline: false }, // ヘルプメッセージに追加
-                    { name: '/company delete', value: 'あなたの会社を削除します。会社のいんコインは消滅します。(社長のみ)', inline: false },
+                    { name: '/company delete', value: 'あなたの会社を削除します。会社のいんコインは全て消滅します。(社長のみ)', inline: false },
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2307,10 +2306,6 @@ const helpCommand = {
                 { name: '/auth-panel <role>', value: '認証パネルをチャンネルに表示し、ボタンで認証を開始します。付与するロールの指定は必須です。このコマンドは管理者権限が必要です。', inline: false },
                 { name: '/auth <code>', value: 'DMで送信された認証コードを入力して認証を完了します。', inline: false },
                 { name: '/ticket-panel <category> <role1> [role2] [role3] [role4]', value: 'チケットパネルをチャンネルに表示し、チケット作成ボタンを設置します。チケットチャンネルは指定されたカテゴリーに作成され、指定したロールに閲覧権限が付与されます。', inline: false },
-                { name: '/money help', value: 'いんコイン関連のコマンドヘルプを表示します。', inline: false },
-                { name: '/jobs list', value: '設定されている職業の一覧を表示します。', inline: false },
-                { name: '/load [user] [all:true]', value: '自分、特定のユーザー、または全てのユーザーのいんコイン情報をFirestoreから再取得して表示します。(allオプションは管理者のみ)', inline: false },
-                { name: '/company help', value: '会社関連のコマンドヘルプを表示します。', inline: false },
                 { name: '/help', value: 'このコマンド一覧を表示します。', inline: false }
             );
         await interaction.editReply({ embeds: [helpEmbed] });
@@ -2341,7 +2336,7 @@ const ticketPanelCommand = {
                 .setRequired(false))
         .addRoleOption(option =>
             option.setName('role4')
-                .setDescription('チケット閲覧権限を付与する任意ロール')
+                .setDescription('チケット閲覧権限を付付与する任意ロール')
                 .setRequired(false)),
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
     async execute(interaction) {
@@ -2438,15 +2433,9 @@ client.once('ready', async () => {
     console.log(`Ready! Logged in as ${client.user.tag}`);
 
     // Firebase Configuration (Canvas環境が優先、なければ.envから読み込み)
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-        apiKey: process.env.FIREBASE_API_KEY,
-        authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-        appId: process.env.FIREBASE_APP_ID,
-        measurementId: process.env.FIREBASE_MEASUREMENT_ID
-    };
+    const firebaseConfig = typeof __firebase_config !== 'undefined' 
+        ? JSON.parse(__firebase_config) 
+        : JSON.parse(process.env.FIREBASE_CONFIG_JSON); // .envからJSON文字列をパースして読み込む
 
     // Firebase初期化
     firebaseApp = initializeApp(firebaseConfig);
@@ -2520,7 +2509,6 @@ client.on('interactionCreate', async interaction => {
         // `/register` コマンド以外のいんコイン関連コマンドは、登録済みユーザーのみが実行可能
         // 管理者コマンドは対象外とする (add-money, remove-moneyなど)
         const nonAdminMoneyCommands = ['gambling', 'money', 'work', 'rob', 'give-money', 'deposit', 'withdraw', 'jobs', 'job-change', 'load', 'company'];
-        // companyコマンドは内部で登録チェックを行うため、ここで全てのcompanyサブコマンドをブロックしない
         // companyコマンドが「add」の場合、未登録ユーザーでも実行できるようにする
         const isCompanyAddCommand = interaction.commandName === 'company' && interaction.options.getSubcommand() === 'add';
 
@@ -2612,7 +2600,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply({ content: 'コマンドの実行中にエラーが発生しました！' });
         } else {
-            // deferReplyが失敗してここでエラーになった場合は、editReplyではなくreply（ただし、上にdeferReplyのcatchがあるので基本ここには来ない）
+            // deferReplyが失敗してここでエラーになった場合は、editReplyではなくreply（ただしdeferReplyのcatchがあるので基本ここには来ない）
             await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました！', ephemeral: true });
         }
     }
