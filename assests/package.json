@@ -1,7 +1,7 @@
 {
-  "name": "discord-incoin-bot",
+  "name": "discordindoorbot",
   "version": "1.0.0",
-  "description": "A Discord bot for managing in-game currency with Firebase.",
+  "description": "いろいろ（）",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
     "incoin",
     "currency"
   ],
-  "author": "Your Name",
+  "author": "indoor",
   "license": "ISC",
   "dependencies": {
     "discord.js": "^14.15.3",
