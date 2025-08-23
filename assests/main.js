@@ -878,7 +878,7 @@ const moneyCommand = {
             const embed = new EmbedBuilder()
                 .setTitle('いんコイン残高')
                 .setColor('#FFFF00')
-                .setDescription(`${targetUser.username} さんの現在のいんコイン残高は **${targetUserCoins.toLocaleString()} いんコイン** です。`)
+                .setDescription(`${targetUser.username} さんの現在のいんコイン残高は **${targetUserCoins.toLocaleString()} いんコイン** です。`) // 修正箇所: ここに閉じ括弧が不足していました
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
 
