@@ -343,7 +343,7 @@ async function setUserLastWorkTime(userId, timestamp) {
 }
 
 async function getUserLastRobTime(userId) {
-    const data = await await getUserData(userId); // Fix: remove duplicate await
+    const data = await getUserData(userId); // Fix: remove duplicate await
     return data.lastRobTime;
 }
 
@@ -3006,9 +3006,10 @@ client.once('ready', async () => {
     console.log(`Ready! Logged in as ${client.user.tag}`);
 
     // Firebase Configuration (Canvas環境が優先、なければ.envから読み込み)
+    // process.env.FIREBASE_CONFIG が undefined の場合、空のJSON文字列 '{}' を使用してエラーを回避
     const firebaseConfig = typeof __firebase_config !== 'undefined' 
         ? JSON.parse(__firebase_config) 
-        : JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+        : JSON.parse(process.env.FIREBASE_CONFIG || '{}'); // ここを修正
 
     // Firebase初期化
     firebaseApp = initializeApp(firebaseConfig);
