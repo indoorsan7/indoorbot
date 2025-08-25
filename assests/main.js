@@ -7,8 +7,6 @@ import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } fro
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-// GUILD_IDはグローバルコマンドのため、コマンド登録以外では使用しません
-// const GUILD_ID = process.env.GUILD_ID;
 
 // Webサーバーの起動（Renderのヘルスチェック用）
 const server = http.createServer((req, res) => {
@@ -42,22 +40,16 @@ let db;
 let auth;
 let firebaseAuthUid = 'anonymous'; // Firebase Auth UID
 
-// === いんコインデータ（ギルドごとにキャッシュされ、登録済みユーザーはFirestoreと同期されます） ===
-// Master cache, key: guildId, value: { userDataCache: Map, companyDataCache: Map, ... }
-const guildSpecificDataCache = new Map();
+// === いんコインデータ（グローバルにキャッシュされ、登録済みユーザーはFirestoreと同期されます） ===
+// グローバルユーザーデータキャッシュ: key: discordUserId, value: { balances: number, bankBalances: number, ... }
+const userDataCache = new Map();
+// グローバル会社データキャッシュ: key: companyId, value: { name: string, ownerId: string, ... }
+const companyDataCache = new Map();
+// グローバル株データキャッシュ: key: companyId, value: { currentPrice: number, priceHistory: [], lastUpdateTime: number }
+const stockDataCache = new Map();
+// ギルドごとのチャンネルチャット報酬設定用キャッシュ: key: guildId, value: Map<channelId, { min: number, max: number }>
+const guildChannelChatRewards = new Map();
 
-// ギルド固有のキャッシュを取得または初期化するヘルパー関数
-function getGuildCache(guildId) {
-    if (!guildSpecificDataCache.has(guildId)) {
-        guildSpecificDataCache.set(guildId, {
-            userDataCache: new Map(), // key: discordUserId, value: { balances: number, bankBalances: number, ... }
-            companyDataCache: new Map(), // 会社データキャッシュ
-            stockDataCache: new Map(), // 株データキャッシュ: key: companyId, value: { currentPrice: number, priceHistory: [], lastUpdateTime: number }
-            channelChatRewards: new Map(), // チャンネルチャット報酬設定用
-        });
-    }
-    return guildSpecificDataCache.get(guildId);
-}
 
 // ユーザーデータのデフォルト構造
 const defaultUserData = {
@@ -101,6 +93,14 @@ const defaultChannelRewardData = {
     max: 0,
 };
 
+// ギルドごとのチャンネル報酬キャッシュを取得または初期化するヘルパー関数
+function getChannelRewardCache(guildId) {
+    if (!guildChannelChatRewards.has(guildId)) {
+        guildChannelChatRewards.set(guildId, new Map());
+    }
+    return guildChannelChatRewards.get(guildId);
+}
+
 
 // 職業ごとの獲得額設定 (ハードコード)
 const jobSettings = new Map([
@@ -141,50 +141,50 @@ const jobChangeCosts = new Map([
 ]);
 
 const authChallenges = new Map(); // 認証チャレンジ用（一時データ）
-// const ticketPanels = new Map();   // チケットパネル設定用（一時データ） - ticketPanelsConfigを使用しているため削除
+const ticketPanelsConfig = new Map(); // チケットパネル設定用（一時データ）
 
-// === Firestore Helper Functions ===
+// === Firestore Helper Functions (GuildIdを削除) ===
 
-// ユーザーデータ
-const getUserDocRef = (guildId, discordUserId) => {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. User data operations might not persist.');
+// ユーザーデータ (グローバル)
+const getUserDocRef = (discordUserId) => {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. User data operations might not persist.');
         return null;
     }
     if (!discordUserId || discordUserId === '') {
         console.warn(`Attempted to get user doc ref with invalid userId: '${discordUserId}'. Returning null.`);
         return null;
     }
-    return doc(collection(db, `artifacts/${appId}/guilds/${guildId}/users`), discordUserId);
+    return doc(collection(db, `artifacts/${appId}/users`), discordUserId);
 };
 
-// 会社データ
-const getCompanyDocRef = (guildId, companyId) => {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. Company data operations might not persist.');
+// 会社データ (グローバル)
+const getCompanyDocRef = (companyId) => {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. Company data operations might not persist.');
         return null;
     }
     if (!companyId || companyId === '') {
         console.warn(`Attempted to get company doc ref with invalid companyId: '${companyId}'. Returning null.`);
         return null;
     }
-    return doc(collection(db, `artifacts/${appId}/guilds/${guildId}/companies`), companyId);
+    return doc(collection(db, `artifacts/${appId}/companies`), companyId);
 };
 
-// 株データ
-const getStockDocRef = (guildId, companyId) => {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. Stock data operations might not persist.');
+// 株データ (グローバル)
+const getStockDocRef = (companyId) => {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. Stock data operations might not persist.');
         return null;
     }
     if (!companyId || companyId === '') {
         console.warn(`Attempted to get stock doc ref with invalid companyId: '${companyId}'. Returning null.`);
         return null;
     }
-    return doc(collection(db, `artifacts/${appId}/guilds/${guildId}/company_stocks`), companyId);
+    return doc(collection(db, `artifacts/${appId}/company_stocks`), companyId);
 };
 
-// チャンネル報酬データ
+// チャンネル報酬データ (ギルド固有) - この関数のみguildIdを残す
 const getChannelRewardDocRef = (guildId, channelId) => {
     if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
         console.warn('Firestore instance, authenticated UID, or guildId is not ready. Channel reward data operations might not persist.');
@@ -199,22 +199,20 @@ const getChannelRewardDocRef = (guildId, channelId) => {
 
 
 /**
- * ユーザーの全データをメモリキャッシュから取得、またはFirestoreからロードします。
+ * ユーザーの全データをメモリキャッシュから取得、またはFirestoreからロードします。(グローバル)
  * 初回アクセス時やデータが存在しない場合はデフォルト値を設定して返します。
- * @param {string} guildId - DiscordギルドID
  * @param {string} discordUserId - DiscordユーザーID
  * @returns {Promise<Object>} - ユーザーのデータオブジェクト
  */
-async function getUserData(guildId, discordUserId) {
-    const guildCache = getGuildCache(guildId);
-    if (guildCache.userDataCache.has(discordUserId)) {
-        return guildCache.userDataCache.get(discordUserId);
+async function getUserData(discordUserId) {
+    if (userDataCache.has(discordUserId)) {
+        return userDataCache.get(discordUserId);
     }
 
-    const docRef = getUserDocRef(guildId, discordUserId);
+    const docRef = getUserDocRef(discordUserId);
     if (!docRef) {
         const data = { ...defaultUserData };
-        guildCache.userDataCache.set(discordUserId, data);
+        userDataCache.set(discordUserId, data);
         return data;
     }
 
@@ -232,194 +230,191 @@ async function getUserData(guildId, discordUserId) {
                     data[key] = defaultUserData[key];
                 }
             }
-            guildCache.userDataCache.set(discordUserId, data);
+            userDataCache.set(discordUserId, data);
             return data;
         } else {
             const data = { ...defaultUserData };
-            guildCache.userDataCache.set(discordUserId, data);
+            userDataCache.set(discordUserId, data);
             return data;
         }
     } catch (error) {
-        console.error(`Error loading user data for guild ${guildId}, user ${discordUserId}:`, error);
+        console.error(`Error loading user data for user ${discordUserId}:`, error);
         const data = { ...defaultUserData };
-        guildCache.userDataCache.set(discordUserId, data);
+        userDataCache.set(discordUserId, data);
         return data;
     }
 }
 
 /**
- * ユーザーのデータをメモリキャッシュを更新し、登録済みユーザーの場合のみFirestoreに保存します。
- * @param {string} guildId - DiscordギルドID
+ * ユーザーのデータをメモリキャッシュを更新し、登録済みユーザーの場合のみFirestoreに保存します。(グローバル)
  * @param {string} discordUserId - DiscordユーザーID
  * @param {Object} userDataToSave - 更新するデータオブジェクト
  */
-async function saveUserDataToFirestore(guildId, discordUserId, userDataToSave) {
+async function saveUserDataToFirestore(discordUserId, userDataToSave) {
     if (userDataToSave.isRegistered === undefined) {
         userDataToSave.isRegistered = true;
     }
 
-    const docRef = getUserDocRef(guildId, discordUserId);
+    const docRef = getUserDocRef(discordUserId);
     if (!docRef) {
-        console.warn(`Cannot save user data for guild ${guildId}, user ${discordUserId}. Firestore reference not available or invalid userId.`);
+        console.warn(`Cannot save user data for user ${discordUserId}. Firestore reference not available or invalid userId.`);
         return;
     }
 
     try {
         await setDoc(docRef, userDataToSave, { merge: true });
-        getGuildCache(guildId).userDataCache.set(discordUserId, userDataToSave);
+        userDataCache.set(discordUserId, userDataToSave);
     } catch (error) {
-        console.error(`Error saving user data for guild ${guildId}, user ${discordUserId}:`, error);
+        console.error(`Error saving user data for user ${discordUserId}:`, error);
     }
 }
 
 
 /**
- * ユーザーのデータをメモリキャッシュを更新し、登録済みユーザーの場合のみFirestoreに保存します。
- * @param {string} guildId - DiscordギルドID
+ * ユーザーのデータをメモリキャッシュを更新し、登録済みユーザーの場合のみFirestoreに保存します。(グローバル)
  * @param {string} discordUserId - DiscordユーザーID
  * @param {string} key - 更新するデータオブジェクトのキー (例: 'balances')
  * @param {*} value - 更新する値
  */
-async function updateUserDataField(guildId, discordUserId, key, value) {
-    const data = await getUserData(guildId, discordUserId);
+async function updateUserDataField(discordUserId, key, value) {
+    const data = await getUserData(discordUserId);
     data[key] = value;
-    getGuildCache(guildId).userDataCache.set(discordUserId, data); // キャッシュを更新
+    userDataCache.set(discordUserId, data); // キャッシュを更新
 
     if (data.isRegistered) {
-        const docRef = getUserDocRef(guildId, discordUserId);
+        const docRef = getUserDocRef(discordUserId);
         if (!docRef) {
-            console.warn(`Cannot update user data field '${key}' for guild ${guildId}, user ${discordUserId}. Firestore reference not available or invalid userId.`);
+            console.warn(`Cannot update user data field '${key}' for user ${discordUserId}. Firestore reference not available or invalid userId.`);
             return;
         }
         try {
             await setDoc(docRef, data, { merge: true });
         } catch (error) {
-            console.error(`Error saving user data for guild ${guildId}, user ${discordUserId} (field: ${key}):`, error);
+            console.error(`Error saving user data for user ${discordUserId} (field: ${key}):`, error);
         }
     }
 }
 
-// === User Data Getters/Setters (modified to use new functions) ===
-async function getCoins(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+// === User Data Getters/Setters (modified to be global) ===
+async function getCoins(userId) {
+    const data = await getUserData(userId);
     return data.balances;
 }
 
-async function addCoins(guildId, userId, amount) {
-    const data = await getUserData(guildId, userId);
+async function addCoins(userId, amount) {
+    const data = await getUserData(userId);
     const newCoins = data.balances + amount;
-    await updateUserDataField(guildId, userId, 'balances', Math.max(0, newCoins));
+    await updateUserDataField(userId, 'balances', Math.max(0, newCoins));
     return Math.max(0, newCoins);
 }
 
-async function getBankCoins(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getBankCoins(userId) {
+    const data = await getUserData(userId);
     return data.bankBalances;
 }
 
-async function addBankCoins(guildId, userId, amount) {
-    const data = await getUserData(guildId, userId);
+async function addBankCoins(userId, amount) {
+    const data = await getUserData(userId);
     const newBankCoins = data.bankBalances + amount;
-    await updateUserDataField(guildId, userId, 'bankBalances', Math.max(0, newBankCoins));
+    await updateUserDataField(userId, 'bankBalances', Math.max(0, newBankCoins));
     return Math.max(0, newBankCoins);
 }
 
-async function getCreditPoints(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getCreditPoints(userId) {
+    const data = await getUserData(userId);
     return data.creditPoints;
 }
 
-async function addCreditPoints(guildId, userId, amount) {
-    const data = await getUserData(guildId, userId);
+async function addCreditPoints(userId, amount) {
+    const data = await getUserData(userId);
     const oldCreditPoints = data.creditPoints;
     const newCreditPoints = oldCreditPoints + amount;
-    await updateUserDataField(guildId, userId, 'creditPoints', newCreditPoints);
+    await updateUserDataField(userId, 'creditPoints', newCreditPoints);
     if (oldCreditPoints < 0 && newCreditPoints >= 0) {
-        await setUserPunishedForNegativeCredit(guildId, userId, false);
-        console.log(`User ${userId} in guild ${guildId}: punishedForNegativeCredit reset to false as creditPoints are now ${newCreditPoints}.`);
+        await setUserPunishedForNegativeCredit(userId, false);
+        console.log(`User ${userId}: punishedForNegativeCredit reset to false as creditPoints are now ${newCreditPoints}.`);
     }
     return newCreditPoints;
 }
 
-async function getUserJob(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getUserJob(userId) {
+    const data = await getUserData(userId);
     return data.job;
 }
 
-async function setUserJob(guildId, userId, jobName) {
-    await updateUserDataField(guildId, userId, 'job', jobName);
+async function setUserJob(userId, jobName) {
+    await updateUserDataField(userId, 'job', jobName);
 }
 
-async function getUserLastWorkTime(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getUserLastWorkTime(userId) {
+    const data = await getUserData(userId);
     return data.lastWorkTime;
 }
 
-async function setUserLastWorkTime(guildId, userId, timestamp) {
-    await updateUserDataField(guildId, userId, 'lastWorkTime', timestamp);
+async function setUserLastWorkTime(userId, timestamp) {
+    await updateUserDataField(userId, 'lastWorkTime', timestamp);
 }
 
-async function getUserLastRobTime(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getUserLastRobTime(userId) {
+    const data = await getUserData(userId);
     return data.lastRobTime;
 }
 
-async function setUserLastRobTime(guildId, userId, timestamp) {
-    await updateUserDataField(guildId, userId, 'lastRobTime', timestamp);
+async function setUserLastRobTime(userId, timestamp) {
+    await updateUserDataField(userId, 'lastRobTime', timestamp);
 }
 
-async function getUserLastInterestTime(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getUserLastInterestTime(userId) {
+    const data = await getUserData(userId);
     return data.lastInterestTime;
 }
 
-async function setUserLastInterestTime(guildId, userId, timestamp) {
-    await updateUserDataField(guildId, userId, 'lastInterestTime', timestamp);
+async function setUserLastInterestTime(userId, timestamp) {
+    await updateUserDataField(userId, 'lastInterestTime', timestamp);
 }
 
-async function getUserPunishedForNegativeCredit(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getUserPunishedForNegativeCredit(userId) {
+    const data = await getUserData(userId);
     return data.punishedForNegativeCredit;
 }
 
-async function setUserPunishedForNegativeCredit(guildId, userId, punished) {
-    await updateUserDataField(guildId, userId, 'punishedForNegativeCredit', punished);
+async function setUserPunishedForNegativeCredit(userId, punished) {
+    await updateUserDataField(userId, 'punishedForNegativeCredit', punished);
 }
 
-async function getSubscribers(guildId, userId) {
-    const data = await getUserData(guildId, userId);
+async function getSubscribers(userId) {
+    const data = await getUserData(userId);
     return data.subscribers;
 }
 
-async function setSubscribers(guildId, userId, amount) {
-    await updateUserDataField(guildId, userId, 'subscribers', amount);
+async function setSubscribers(userId, amount) {
+    await updateUserDataField(userId, 'subscribers', amount);
 }
 
-async function getUserStocks(guildId, userId, companyId) {
-    const data = await getUserData(guildId, userId);
+async function getUserStocks(userId, companyId) {
+    const data = await getUserData(userId);
     return data.stocks[companyId] || 0;
 }
 
-async function addUserStocks(guildId, userId, companyId, amount) {
-    const data = await getUserData(guildId, userId);
+async function addUserStocks(userId, companyId, amount) {
+    const data = await getUserData(userId);
     if (!data.stocks[companyId]) {
         data.stocks[companyId] = 0;
     }
     data.stocks[companyId] = Math.max(0, data.stocks[companyId] + amount);
-    await updateUserDataField(guildId, userId, 'stocks', data.stocks); // stocksオブジェクト全体を更新
+    await updateUserDataField(userId, 'stocks', data.stocks); // stocksオブジェクト全体を更新
     return data.stocks[companyId];
 }
 
-// === Company Data Functions ===
-async function getCompanyData(guildId, companyId) {
-    const guildCache = getGuildCache(guildId);
-    if (guildCache.companyDataCache.has(companyId)) {
-        return guildCache.companyDataCache.get(companyId);
+// === Company Data Functions (modified to be global) ===
+async function getCompanyData(companyId) {
+    if (companyDataCache.has(companyId)) {
+        return companyDataCache.get(companyId);
     }
-    const docRef = getCompanyDocRef(guildId, companyId);
+    const docRef = getCompanyDocRef(companyId);
     if (!docRef) {
         const data = { ...defaultCompanyData };
-        guildCache.companyDataCache.set(companyId, data);
+        companyDataCache.set(companyId, data);
         return data;
     }
     try {
@@ -435,66 +430,67 @@ async function getCompanyData(guildId, companyId) {
             if (data.password === undefined) {
                 data.password = null;
             }
-            guildCache.companyDataCache.set(companyId, data);
+            companyDataCache.set(companyId, data);
             return data;
         } else {
             const data = { ...defaultCompanyData };
-            guildCache.companyDataCache.set(companyId, data);
+            companyDataCache.set(companyId, data);
             return data;
         }
     } catch (error) {
-        console.error(`Error loading company data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error loading company data for company ${companyId}:`, error);
         const data = { ...defaultCompanyData };
-        guildCache.companyDataCache.set(companyId, data);
+        companyDataCache.set(companyId, data);
         return data;
     }
 }
 
-async function saveCompanyDataToFirestore(guildId, companyId, companyDataToSave) {
-    const docRef = getCompanyDocRef(guildId, companyId);
+async function saveCompanyDataToFirestore(companyId, companyDataToSave) {
+    const docRef = getCompanyDocRef(companyId);
     if (!docRef) {
-        console.warn(`Cannot save company data for guild ${guildId}, company ${companyId}. Firestore reference not available or invalid companyId.`);
+        console.warn(`Cannot save company data for company ${companyId}. Firestore reference not available or invalid companyId.`);
         return false; // エラーとしてfalseを返す
     }
     try {
         await setDoc(docRef, companyDataToSave, { merge: true });
-        getGuildCache(guildId).companyDataCache.set(companyId, companyDataToSave);
+        companyDataCache.set(companyId, companyDataToSave);
         return true; // 成功
     } catch (error) {
-        console.error(`Error saving company data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error saving company data for company ${companyId}:`, error);
         return false; // 失敗
     }
 }
 
-async function updateCompanyDataField(guildId, companyId, key, value) {
-    const data = await getCompanyData(guildId, companyId);
+async function updateCompanyDataField(companyId, key, value) {
+    const data = await getCompanyData(companyId);
     data[key] = value;
-    getGuildCache(guildId).companyDataCache.set(companyId, data);
-    return await saveCompanyDataToFirestore(guildId, companyId, data); // 成功/失敗を返す
+    companyDataCache.set(companyId, data);
+    return await saveCompanyDataToFirestore(companyId, data); // 成功/失敗を返す
 }
 
-async function deleteCompanyFromFirestore(guildId, companyId) {
-    const docRef = getCompanyDocRef(guildId, companyId);
+async function deleteCompanyFromFirestore(companyId) {
+    const docRef = getCompanyDocRef(companyId);
     if (!docRef) {
-        console.warn(`Cannot delete company data for guild ${guildId}, company ${companyId}. Firestore reference not available or invalid companyId.`);
+        console.warn(`Cannot delete company data for company ${companyId}. Firestore reference not available or invalid companyId.`);
         return;
     }
     try {
         await deleteDoc(docRef);
-        getGuildCache(guildId).companyDataCache.delete(companyId);
+        companyDataCache.delete(companyId);
         // 会社が削除されたら、その株データも削除
-        await deleteStockFromFirestore(guildId, companyId);
+        await deleteStockFromFirestore(companyId);
     } catch (error) {
-        console.error(`Error deleting company data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error deleting company data for company ${companyId}:`, error);
     }
 }
 
-async function getAllCompaniesInGuild(guildId) {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. Cannot get all companies for guild.');
+// グローバルな全ての会社を取得する
+async function getAllCompanies() {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. Cannot get all companies.');
         return [];
     }
-    const companiesCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/companies`);
+    const companiesCollectionRef = collection(db, `artifacts/${appId}/companies`);
     const companies = [];
     try {
         const querySnapshot = await getDocs(companiesCollectionRef);
@@ -510,27 +506,26 @@ async function getAllCompaniesInGuild(guildId) {
             if (data.password === undefined) {
                 data.password = null;
             }
-            guildCache.companyDataCache.set(companyId, data);
+            companyDataCache.set(companyId, data);
             companies.push({ id: companyId, ...data });
         });
         return companies;
     } catch (error) {
-        console.error(`Error fetching all companies for guild ${guildId}:`, error);
+        console.error(`Error fetching all companies:`, error);
         return [];
     }
 }
 
 
-// === Stock Data Functions ===
-async function getStockData(guildId, companyId) {
-    const guildCache = getGuildCache(guildId);
-    if (guildCache.stockDataCache.has(companyId)) {
-        return guildCache.stockDataCache.get(companyId);
+// === Stock Data Functions (modified to be global) ===
+async function getStockData(companyId) {
+    if (stockDataCache.has(companyId)) {
+        return stockDataCache.get(companyId);
     }
-    const docRef = getStockDocRef(guildId, companyId);
+    const docRef = getStockDocRef(companyId);
     if (!docRef) {
         const data = { ...defaultStockData, companyId: companyId };
-        guildCache.stockDataCache.set(companyId, data);
+        stockDataCache.set(companyId, data);
         return data;
     }
     try {
@@ -542,62 +537,63 @@ async function getStockData(guildId, companyId) {
                     data[key] = defaultStockData[key];
                 }
             }
-            guildCache.stockDataCache.set(companyId, data);
+            stockDataCache.set(companyId, data);
             return data;
         } else {
             const data = { ...defaultStockData, companyId: companyId };
-            guildCache.stockDataCache.set(companyId, data);
+            stockDataCache.set(companyId, data);
             return data;
         }
     } catch (error) {
-        console.error(`Error loading stock data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error loading stock data for company ${companyId}:`, error);
         const data = { ...defaultStockData, companyId: companyId };
-        guildCache.stockDataCache.set(companyId, data);
+        stockDataCache.set(companyId, data);
         return data;
     }
 }
 
-async function saveStockDataToFirestore(guildId, companyId, stockDataToSave) {
-    const docRef = getStockDocRef(guildId, companyId);
+async function saveStockDataToFirestore(companyId, stockDataToSave) {
+    const docRef = getStockDocRef(companyId);
     if (!docRef) {
-        console.warn(`Cannot save stock data for guild ${guildId}, company ${companyId}. Firestore reference not available or invalid companyId.`);
+        console.warn(`Cannot save stock data for company ${companyId}. Firestore reference not available or invalid companyId.`);
         return;
     }
     try {
         await setDoc(docRef, stockDataToSave, { merge: true });
-        getGuildCache(guildId).stockDataCache.set(companyId, stockDataToSave);
+        stockDataCache.set(companyId, stockDataToSave);
     } catch (error) {
-        console.error(`Error saving stock data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error saving stock data for company ${companyId}:`, error);
     }
 }
 
-async function updateStockDataField(guildId, companyId, key, value) {
-    const data = await getStockData(guildId, companyId);
+async function updateStockDataField(companyId, key, value) {
+    const data = await getStockData(companyId);
     data[key] = value;
-    getGuildCache(guildId).stockDataCache.set(companyId, data);
-    await saveStockDataToFirestore(guildId, companyId, data);
+    stockDataCache.set(companyId, data);
+    await saveStockDataToFirestore(companyId, data);
 }
 
-async function deleteStockFromFirestore(guildId, companyId) {
-    const docRef = getStockDocRef(guildId, companyId);
+async function deleteStockFromFirestore(companyId) {
+    const docRef = getStockDocRef(companyId);
     if (!docRef) {
-        console.warn(`Cannot delete stock data for guild ${guildId}, company ${companyId}. Firestore reference not available or invalid companyId.`);
+        console.warn(`Cannot delete stock data for company ${companyId}. Firestore reference not available or invalid companyId.`);
         return;
     }
     try {
         await deleteDoc(docRef);
-        getGuildCache(guildId).stockDataCache.delete(companyId);
+        stockDataCache.delete(companyId);
     } catch (error) {
-        console.error(`Error deleting stock data for guild ${guildId}, company ${companyId}:`, error);
+        console.error(`Error deleting stock data for company ${companyId}:`, error);
     }
 }
 
-async function getAllStocksInGuild(guildId) {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. Cannot get all stocks for guild.');
+// グローバルな全ての株データを取得する
+async function getAllStocks() {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. Cannot get all stocks.');
         return [];
     }
-    const stocksCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/company_stocks`);
+    const stocksCollectionRef = collection(db, `artifacts/${appId}/company_stocks`);
     const stocks = [];
     try {
         const querySnapshot = await getDocs(stocksCollectionRef);
@@ -609,35 +605,35 @@ async function getAllStocksInGuild(guildId) {
                     data[key] = defaultStockData[key];
                 }
             }
-            getGuildCache(guildId).stockDataCache.set(companyId, data);
+            stockDataCache.set(companyId, data);
             stocks.push({ id: companyId, ...data });
         });
         return stocks;
     } catch (error) {
-        console.error(`Error fetching all stocks for guild ${guildId}:`, error);
+        console.error(`Error fetching all stocks:`, error);
         return [];
     }
 }
 
 
-// === Channel Reward Data Functions ===
+// === Channel Reward Data Functions (still guild-specific) ===
 /**
- * チャンネル報酬データをメモリキャッシュから取得、またはFirestoreからロードします。
+ * チャンネル報酬データをメモリキャッシュから取得、またはFirestoreからロードします。(ギルド固有)
  * @param {string} guildId - DiscordギルドID
  * @param {string} channelId - チャンネルID
  * @returns {Promise<Object>} - チャンネル報酬データオブジェクト
  */
 async function getChannelRewardData(guildId, channelId) {
-    const guildCache = getGuildCache(guildId);
+    const channelRewardCache = getChannelRewardCache(guildId);
     // まずメモリキャッシュから取得
-    if (guildCache.channelChatRewards.has(channelId)) {
-        return guildCache.channelChatRewards.get(channelId);
+    if (channelRewardCache.has(channelId)) {
+        return channelRewardCache.get(channelId);
     }
 
     const docRef = getChannelRewardDocRef(guildId, channelId);
     if (!docRef) {
         const data = { ...defaultChannelRewardData };
-        guildCache.channelChatRewards.set(channelId, data);
+        channelRewardCache.set(channelId, data);
         return data;
     }
     try {
@@ -649,23 +645,23 @@ async function getChannelRewardData(guildId, channelId) {
                     data[key] = defaultChannelRewardData[key];
                 }
             }
-            guildCache.channelChatRewards.set(channelId, data);
+            channelRewardCache.set(channelId, data);
             return data;
         } else {
             const data = { ...defaultChannelRewardData };
-            guildCache.channelChatRewards.set(channelId, data);
+            channelRewardCache.set(channelId, data);
             return data;
         }
     } catch (error) {
         console.error(`Error loading channel reward data for guild ${guildId}, channel ${channelId}:`, error);
         const data = { ...defaultChannelRewardData };
-        guildCache.channelChatRewards.set(channelId, data);
+        channelRewardCache.set(channelId, data);
         return data;
     }
 }
 
 /**
- * チャンネル報酬データをメモリキャッシュを更新し、Firestoreに保存します。
+ * チャンネル報酬データをメモリキャッシュを更新し、Firestoreに保存します。(ギルド固有)
  * @param {string} guildId - DiscordギルドID
  * @param {string} channelId - チャンネルID
  * @param {Object} rewardDataToSave - 更新するデータオブジェクト
@@ -680,7 +676,7 @@ async function saveChannelRewardDataToFirestore(guildId, channelId, rewardDataTo
     }
     try {
         await setDoc(docRef, rewardDataToSave, { merge: true });
-        getGuildCache(guildId).channelChatRewards.set(channelId, rewardDataToSave); // キャッシュも更新
+        getChannelRewardCache(guildId).set(channelId, rewardDataToSave); // キャッシュも更新
         console.log(`Successfully saved channel reward data for guild ${guildId}, channel ${channelId}.`);
         return true; // 成功を返す
     } catch (error) {
@@ -692,24 +688,21 @@ async function saveChannelRewardDataToFirestore(guildId, channelId, rewardDataTo
 
 
 /**
- * Firestoreから指定ギルドの全てのユーザーデータ、会社データ、株データ、チャンネル報酬データを同期し、キャッシュを更新します。
+ * Firestoreから全てのグローバルデータと、各ギルドのチャンネル報酬データを同期し、キャッシュを更新します。
  * 存在しない会社IDを持つユーザーのデータをクリーンアップします。
- * @param {string} guildId - DiscordギルドID
- * @returns {object} - 同期されたデータ数を返します。
  */
-async function syncGuildDataFromFirestore(guildId) {
-    console.log(`Syncing all data for guild ${guildId} from Firestore...`);
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready. Cannot sync guild data.');
+async function syncAllDataFromFirestore() {
+    console.log(`Syncing all global data from Firestore...`);
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready. Cannot sync global data.');
         return { users: 0, companies: 0, stocks: 0, channelRewards: 0 };
     }
 
-    const guildCache = getGuildCache(guildId);
     // まずキャッシュをクリア
-    guildCache.userDataCache.clear();
-    guildCache.companyDataCache.clear();
-    guildCache.stockDataCache.clear();
-    guildCache.channelChatRewards.clear(); // チャンネル報酬キャッシュもクリア
+    userDataCache.clear();
+    companyDataCache.clear();
+    stockDataCache.clear();
+    guildChannelChatRewards.clear(); // チャンネル報酬キャッシュもクリア
 
     let loadedUsersCount = 0;
     let loadedCompaniesCount = 0;
@@ -717,8 +710,8 @@ async function syncGuildDataFromFirestore(guildId) {
     let loadedChannelRewardsCount = 0;
 
     try {
-        // 全ての会社データを読み込み
-        const companiesCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/companies`);
+        // 全ての会社データを読み込み (グローバル)
+        const companiesCollectionRef = collection(db, `artifacts/${appId}/companies`);
         const companiesQuerySnapshot = await getDocs(companiesCollectionRef);
         companiesQuerySnapshot.forEach(docSnap => {
             const companyId = docSnap.id;
@@ -728,17 +721,16 @@ async function syncGuildDataFromFirestore(guildId) {
                     data[key] = defaultCompanyData[key];
                 }
             }
-            // パスワードフィールドがなければnullで初期化
             if (data.password === undefined) {
                 data.password = null;
             }
-            guildCache.companyDataCache.set(companyId, data);
+            companyDataCache.set(companyId, data);
             loadedCompaniesCount++;
         });
-        console.log(`Successfully loaded ${loadedCompaniesCount} company data entries for guild ${guildId} from Firestore.`);
+        console.log(`Successfully loaded ${loadedCompaniesCount} global company data entries from Firestore.`);
 
-        // 全ての株データを読み込み
-        const stocksCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/company_stocks`);
+        // 全ての株データを読み込み (グローバル)
+        const stocksCollectionRef = collection(db, `artifacts/${appId}/company_stocks`);
         const stocksQuerySnapshot = await getDocs(stocksCollectionRef);
         stocksQuerySnapshot.forEach(docSnap => {
             const companyId = docSnap.id;
@@ -748,30 +740,13 @@ async function syncGuildDataFromFirestore(guildId) {
                     data[key] = defaultStockData[key];
                 }
             }
-            guildCache.stockDataCache.set(companyId, data);
+            stockDataCache.set(companyId, data);
             loadedStocksCount++;
         });
-        console.log(`Successfully loaded ${loadedStocksCount} stock data entries for guild ${guildId} from Firestore.`);
+        console.log(`Successfully loaded ${loadedStocksCount} global stock data entries from Firestore.`);
 
-        // 全てのチャンネル報酬データを読み込み
-        const channelRewardsCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/channel_rewards`);
-        const channelRewardsQuerySnapshot = await getDocs(channelRewardsCollectionRef);
-        channelRewardsQuerySnapshot.forEach(docSnap => {
-            const channelId = docSnap.id;
-            const data = docSnap.data();
-            for (const key in defaultChannelRewardData) {
-                if (data[key] === undefined) {
-                    data[key] = defaultChannelRewardData[key];
-                }
-            }
-            guildCache.channelChatRewards.set(channelId, data);
-            loadedChannelRewardsCount++;
-        });
-        console.log(`Successfully loaded ${loadedChannelRewardsCount} channel reward data entries for guild ${guildId} from Firestore.`);
-
-
-        // 全てのユーザーデータを読み込み
-        const usersCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/users`);
+        // 全てのユーザーデータを読み込み (グローバル)
+        const usersCollectionRef = collection(db, `artifacts/${appId}/users`);
         const usersQuerySnapshot = await getDocs(usersCollectionRef);
         for (const docSnap of usersQuerySnapshot.docs) {
             const userId = docSnap.id;
@@ -782,54 +757,80 @@ async function syncGuildDataFromFirestore(guildId) {
                 }
             }
             
-            // 存在しないcompanyIdのクリーンアップ
-            if (data.companyId && !guildCache.companyDataCache.has(data.companyId)) {
-                console.warn(`User ${userId} in guild ${guildId} has companyId ${data.companyId} but company does not exist. Cleaning up.`);
+            // 存在しないcompanyIdのクリーンアップ (グローバルキャッシュと比較)
+            if (data.companyId && !companyDataCache.has(data.companyId)) {
+                console.warn(`User ${userId} has companyId ${data.companyId} but company does not exist globally. Cleaning up.`);
                 data.companyId = null;
                 data.job = '無職'; // 会社がないので無職に戻す
-                await saveUserDataToFirestore(guildId, userId, data); // Firestoreも更新
+                await saveUserDataToFirestore(userId, data); // Firestoreも更新
             }
 
-            // 存在しない会社の株をユーザーの保有株から削除
+            // 存在しない会社の株をユーザーの保有株から削除 (グローバルキャッシュと比較)
             const userStocks = data.stocks || {};
             let stocksChanged = false;
             for (const companyId in userStocks) {
-                if (!guildCache.companyDataCache.has(companyId)) {
-                    console.warn(`User ${userId} in guild ${guildId} owns stock for deleted company ${companyId}. Removing from user data.`);
+                if (!companyDataCache.has(companyId)) {
+                    console.warn(`User ${userId} owns stock for deleted company ${companyId}. Removing from user data.`);
                     delete userStocks[companyId];
                     stocksChanged = true;
                 }
             }
             if (stocksChanged) {
                 data.stocks = userStocks;
-                await saveUserDataToFirestore(guildId, userId, data); // Firestoreも更新
+                await saveUserDataToFirestore(userId, data); // Firestoreも更新
             }
 
-            guildCache.userDataCache.set(userId, data);
+            userDataCache.set(userId, data);
             loadedUsersCount++;
         }
-        console.log(`Successfully loaded and cleaned up ${loadedUsersCount} user data entries for guild ${guildId} from Firestore.`);
+        console.log(`Successfully loaded and cleaned up ${loadedUsersCount} global user data entries from Firestore.`);
+
+        // 各ギルドのチャンネル報酬データを読み込み
+        // Discordクライアントが準備完了してからギルドリストを取得
+        if (client.isReady()) {
+            for (const guild of client.guilds.cache.values()) {
+                const guildId = guild.id;
+                const channelRewardsCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/channel_rewards`);
+                const channelRewardsQuerySnapshot = await getDocs(channelRewardsCollectionRef);
+                const guildSpecificRewards = getChannelRewardCache(guildId);
+                channelRewardsQuerySnapshot.forEach(docSnap => {
+                    const channelId = docSnap.id;
+                    const data = docSnap.data();
+                    for (const key in defaultChannelRewardData) {
+                        if (data[key] === undefined) {
+                            data[key] = defaultChannelRewardData[key];
+                        }
+                    }
+                    guildSpecificRewards.set(channelId, data);
+                    loadedChannelRewardsCount++;
+                });
+            }
+        } else {
+            console.warn('Client not ready to load guild-specific channel rewards during initial sync.');
+        }
+        console.log(`Successfully loaded ${loadedChannelRewardsCount} guild-specific channel reward data entries from Firestore.`);
 
         return { users: loadedUsersCount, companies: loadedCompaniesCount, stocks: loadedStocksCount, channelRewards: loadedChannelRewardsCount };
     } catch (error) {
-        console.error(`Error syncing all data for guild ${guildId} from Firestore:`, error);
+        console.error(`Error syncing all global data from Firestore:`, error);
         return { users: 0, companies: 0, stocks: 0, channelRewards: 0 };
     }
 }
 
-// === Stock Price Fluctuation ===
+
+// === Stock Price Fluctuation (modified to be global) ===
 const STOCK_UPDATE_INTERVAL_MS = 10 * 60 * 1000; // 10分
 const STOCK_PRICE_MIN = 650;
 const STOCK_PRICE_MAX = 1500;
 const STOCK_PRICE_CHANGE_MAX = 100; // 10分ごとの最大変動幅
 
-async function applyStockPriceUpdates(guildId) {
-    console.log(`Applying stock price updates for guild ${guildId}...`);
-    const companies = await getAllCompaniesInGuild(guildId); // 現在存在する会社を全て取得
+async function applyStockPriceUpdates() {
+    console.log(`Applying global stock price updates...`);
+    const companies = await getAllCompanies(); // 現在存在する会社を全て取得 (グローバル)
 
     for (const company of companies) {
         const companyId = company.id;
-        let stockData = await getStockData(guildId, companyId);
+        let stockData = await getStockData(companyId);
 
         const now = Date.now();
         let newPrice;
@@ -861,24 +862,24 @@ async function applyStockPriceUpdates(guildId) {
         stockData.lastUpdateTime = now;
         stockData.companyId = companyId; // companyIdも保存
 
-        await saveStockDataToFirestore(guildId, companyId, stockData);
-        console.log(`Updated stock price for ${company.name} (${companyId}) in guild ${guildId}: ${newPrice.toLocaleString()} いんコイン`);
+        await saveStockDataToFirestore(companyId, stockData);
+        console.log(`Updated stock price for ${company.name} (${companyId}): ${newPrice.toLocaleString()} いんコイン`);
     }
     // 会社が削除されたが、株データが残っている場合のクリーンアップ
-    const allStocks = await getAllStocksInGuild(guildId);
+    const allStocks = await getAllStocks();
     for (const stock of allStocks) {
         if (!companies.some(c => c.id === stock.companyId)) {
-            console.warn(`Stock data found for non-existent company ${stock.companyId} in guild ${guildId}. Deleting stock data.`);
-            await deleteStockFromFirestore(guildId, stock.companyId);
+            console.warn(`Stock data found for non-existent company ${stock.companyId}. Deleting global stock data.`);
+            await deleteStockFromFirestore(stock.companyId);
         }
     }
 }
 
 
-// 会社メンバーへの日給支払い処理と維持費の引き落とし
-async function applyDailyCompanyPayouts(guildId) {
-    console.log(`Applying daily company payouts for guild ${guildId}...`);
-    const companies = await getAllCompaniesInGuild(guildId); // 最新の会社データを取得
+// 会社メンバーへの日給支払い処理と維持費の引き落とし (グローバル)
+async function applyDailyCompanyPayouts() {
+    console.log(`Applying daily global company payouts...`);
+    const companies = await getAllCompanies(); // 最新の会社データを全て取得 (グローバル)
 
     for (const company of companies) {
         const now = Date.now();
@@ -895,10 +896,10 @@ async function applyDailyCompanyPayouts(guildId) {
             const maintenanceFee = (dailySalary * members.length) + 300000;
             const totalPayoutNeeded = (dailySalary * members.length); // 純粋な日給の合計
 
-            console.log(`Company ${companyName} (${company.id}) in guild ${guildId}: Daily salary: ${dailySalary}, Members: ${members.length}, Maintenance Fee: ${maintenanceFee}, Current Budget: ${company.budget}`);
+            console.log(`Company ${companyName} (${company.id}): Daily salary: ${dailySalary}, Members: ${members.length}, Maintenance Fee: ${maintenanceFee}, Current Budget: ${company.budget}`);
 
             if (company.budget < maintenanceFee + totalPayoutNeeded) { // 維持費と日給支払いの両方で足りない場合
-                console.warn(`Company ${companyName} (${company.id}) in guild ${guildId} budget (${company.budget}) is insufficient for maintenance fee (${maintenanceFee}) and payout (${totalPayoutNeeded}). Deleting company.`);
+                console.warn(`Company ${companyName} (${company.id}) budget (${company.budget}) is insufficient for maintenance fee (${maintenanceFee}) and payout (${totalPayoutNeeded}). Deleting company.`);
 
                 // 社長に予算不足と会社削除をDM通知
                 const owner = await client.users.fetch(ownerId).catch(() => null);
@@ -922,8 +923,8 @@ async function applyDailyCompanyPayouts(guildId) {
 
                 // 全メンバーのcompanyIdをnullにリセットし、職業を「無職」に戻す
                 for (const member of members) {
-                    await updateUserDataField(guildId, member.id, 'companyId', null);
-                    await setUserJob(guildId, member.id, "無職"); // 社長も含め全員無職に戻す
+                    await updateUserDataField(member.id, 'companyId', null);
+                    await setUserJob(member.id, "無職"); // 社長も含め全員無職に戻す
                     // メンバーにも会社が解散したことをDMで通知
                     const memberUser = await client.users.fetch(member.id).catch(() => null);
                     if (memberUser && member.id !== ownerId) { // 社長には既にDM済みのため重複を避ける
@@ -940,18 +941,18 @@ async function applyDailyCompanyPayouts(guildId) {
                         }
                     }
                 }
-                await deleteCompanyFromFirestore(guildId, company.id); // 会社データを削除
-                console.log(`Company ${companyName} (${company.id}) in guild ${guildId} was deleted due to insufficient budget.`);
+                await deleteCompanyFromFirestore(company.id); // 会社データを削除
+                console.log(`Company ${companyName} (${company.id}) was deleted due to insufficient budget.`);
                 continue; // 次の会社へ
             }
 
             // 予算から維持費を差し引く
-            await updateCompanyDataField(guildId, company.id, 'budget', company.budget - maintenanceFee);
-            console.log(`Company ${companyName} (${company.id}) in guild ${guildId}: Deducted maintenance fee ${maintenanceFee}. New budget: ${company.budget - maintenanceFee}`);
+            await updateCompanyDataField(company.id, 'budget', company.budget - maintenanceFee);
+            console.log(`Company ${companyName} (${company.id}): Deducted maintenance fee ${maintenanceFee}. New budget: ${company.budget - maintenanceFee}`);
 
             // 各メンバーに日給を付与
             for (const member of members) {
-                await addCoins(guildId, member.id, dailySalary);
+                await addCoins(member.id, dailySalary);
                 // メンバーに日給支払いをDM通知
                 const memberUser = await client.users.fetch(member.id).catch(() => null);
                 if (memberUser) {
@@ -959,7 +960,7 @@ async function applyDailyCompanyPayouts(guildId) {
                         .setTitle('日給支払い通知')
                         .setColor('#00FF00')
                         .setDescription(`会社「${companyName}」から日給として **${dailySalary.toLocaleString()}** いんコインが支払われました。
-現在の所持金: ${(await getUserData(guildId, member.id)).balances.toLocaleString()} いんコイン`)
+現在の所持金: ${(await getUserData(member.id)).balances.toLocaleString()} いんコイン`)
                         .setTimestamp();
                     try {
                         await memberUser.send({ embeds: [embed] });
@@ -968,8 +969,8 @@ async function applyDailyCompanyPayouts(guildId) {
                     }
                 }
             }
-            console.log(`Company ${companyName} (${company.id}) in guild ${guildId} paid ${totalPayoutNeeded} to its members.`);
-            await saveCompanyDataToFirestore(guildId, company.id, { ...company, lastPayoutTime: now }); // 成功しても失敗しても時間を更新
+            console.log(`Company ${companyName} (${company.id}) paid ${totalPayoutNeeded} to its members.`);
+            await saveCompanyDataToFirestore(company.id, { ...company, lastPayoutTime: now }); // 成功しても失敗しても時間を更新
         }
     }
 }
@@ -984,21 +985,15 @@ setInterval(async () => {
     // 日本時間の午後9時 (21時00分) に実行 - 会社支払い
     if (currentHour === 21 && currentMinute === 0) {
         if (client.isReady() && db && firebaseAuthUid !== 'anonymous') {
-            // 全てのギルドに対して実行
-            for (const guild of client.guilds.cache.values()) {
-                console.log(`Running daily payouts for guild: ${guild.id}`);
-                await applyDailyCompanyPayouts(guild.id);
-            }
+            console.log(`Running daily global payouts.`);
+            await applyDailyCompanyPayouts();
         }
     }
     // 毎週の更新もここで定期実行 (木曜日の午後9時)
     if (currentHour === 21 && currentMinute === 0 && now.getDay() === 4) { // 木曜日の午後9時 (0=日, 1=月, ..., 4=木)
         if (client.isReady() && db && firebaseAuthUid !== 'anonymous') {
-            // 全てのギルドに対して実行
-            for (const guild of client.guilds.cache.values()) {
-                console.log(`Running weekly updates for guild: ${guild.id}`);
-                await applyWeeklyUpdates(guild.id);
-            }
+            console.log(`Running weekly global updates.`);
+            await applyWeeklyUpdates();
         }
     }
 }, 60 * 1000); // 1分ごとにチェック
@@ -1006,21 +1001,18 @@ setInterval(async () => {
 // 株価更新を10分ごとに実行
 setInterval(async () => {
     if (client.isReady() && db && firebaseAuthUid !== 'anonymous') {
-        // 全てのギルドに対して実行
-        for (const guild of client.guilds.cache.values()) {
-            console.log(`Running stock price updates for guild: ${guild.id}`);
-            await applyStockPriceUpdates(guild.id);
-        }
+        console.log(`Running global stock price updates.`);
+        await applyStockPriceUpdates();
     }
 }, STOCK_UPDATE_INTERVAL_MS);
 
 
-async function applyWeeklyUpdates(guildId) {
-    if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
-        console.warn('Firestore instance, authenticated UID, or guildId is not ready for weekly updates. Skipping.');
+async function applyWeeklyUpdates() {
+    if (!db || firebaseAuthUid === 'anonymous') {
+        console.warn('Firestore instance or authenticated UID is not ready for weekly updates. Skipping.');
         return;
     }
-    const usersCollectionRef = collection(db, `artifacts/${appId}/guilds/${guildId}/users`);
+    const usersCollectionRef = collection(db, `artifacts/${appId}/users`);
     try {
         const querySnapshot = await getDocs(usersCollectionRef);
         for (const docSnapshot of querySnapshot.docs) {
@@ -1033,7 +1025,7 @@ async function applyWeeklyUpdates(guildId) {
                     userData[key] = defaultUserData[key];
                 }
             }
-            getGuildCache(guildId).userDataCache.set(userId, userData); // キャッシュを最新の状態に保つ
+            userDataCache.set(userId, userData); // キャッシュを最新の状態に保つ
 
             if (userData.isRegistered) {
                 const lastInterestTime = userData.lastInterestTime || 0;
@@ -1046,29 +1038,29 @@ async function applyWeeklyUpdates(guildId) {
                     if (creditPoints < 0) {
                         const deductionAmount = Math.floor(bankCoins * 0.10);
                         if (deductionAmount > 0) {
-                            await addBankCoins(guildId, userId, -deductionAmount);
-                            console.log(`User ${userId} in guild ${guildId}: Deducted ${deductionAmount} (10%) from bank due to negative credit. New bank balance: ${await getBankCoins(guildId, userId)}`);
+                            await addBankCoins(userId, -deductionAmount);
+                            console.log(`User ${userId}: Deducted ${deductionAmount} (10%) from bank due to negative credit. New bank balance: ${await getBankCoins(userId)}`);
                             updated = true;
                         }
-                        await addCreditPoints(guildId, userId, -1);
-                        console.log(`User ${userId} in guild ${guildId}: Credit points decreased to ${await getCreditPoints(guildId, userId)} due to negative credit.`);
+                        await addCreditPoints(userId, -1);
+                        console.log(`User ${userId}: Credit points decreased to ${await getCreditPoints(userId)} due to negative credit.`);
                         updated = true;
                     } else {
                         const interestAmount = Math.floor(bankCoins * 0.03);
                         if (interestAmount > 0) {
-                            await addBankCoins(guildId, userId, interestAmount);
-                            console.log(`User ${userId} in guild ${guildId}: Applied ${interestAmount} interest. New bank balance: ${await getBankCoins(guildId, userId)}`);
+                            await addBankCoins(userId, interestAmount);
+                            console.log(`User ${userId}: Applied ${interestAmount} interest. New bank balance: ${await getBankCoins(userId)}`);
                             updated = true;
                         }
                     }
                     if (updated) {
-                        await setUserLastInterestTime(guildId, userId, now);
+                        await setUserLastInterestTime(userId, now);
                     }
                 }
             }
         }
     } catch (error) {
-        console.error(`Error applying weekly updates for guild ${guildId} from Firestore:`, error);
+        console.error(`Error applying weekly global updates from Firestore:`, error);
     }
 }
 
@@ -1080,29 +1072,29 @@ const registerCommand = {
         .setDescription('いんコインシステムに登録します。登録しないとデータは保存されません。'),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
-        const userData = await getUserData(guildId, userId);
+        const userData = await getUserData(userId); // guildIdを削除
 
         if (userData.isRegistered) {
             return interaction.editReply({ content: 'あなたは既にいんコインシステムに登録済みです。' });
         }
 
-        const docRef = getUserDocRef(guildId, userId);
+        const docRef = getUserDocRef(userId); // guildIdを削除
         if (!docRef) {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         try {
             const dataToSave = { ...userData, isRegistered: true, username: interaction.user.username }; 
             await setDoc(docRef, dataToSave);
-            getGuildCache(guildId).userDataCache.set(userId, dataToSave);
+            userDataCache.set(userId, dataToSave); // キャッシュ更新
 
-            await interaction.editReply({ content: 'いんコインシステムへの登録が完了しました！これであなたのデータは自動的に保存されます。' });
+            await interaction.editReply({ content: 'いんコインシステムへの登録が完了しました！これであなたのデータは自動的に保存され、**どのサーバーでも共通**で利用できます。' });
         } catch (error) {
-            console.error(`Error registering user ${userId} in guild ${guildId}:`, error);
+            console.error(`Error registering user ${userId}:`, error);
             await interaction.editReply({ content: '登録中にエラーが発生しました。もう一度お試しください。' });
         }
     },
@@ -1121,12 +1113,12 @@ const gamblingCommand = {
                 .setMinValue(1)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
-        const creditPoints = await getCreditPoints(guildId, userId);
+        const creditPoints = await getCreditPoints(userId); // guildIdを削除
 
         if (creditPoints < 0) {
             return interaction.editReply({ content: '信用ポイントが負のため、ギャンブルはできません。' });
@@ -1134,7 +1126,7 @@ const gamblingCommand = {
 
         const betAmount = interaction.options.getInteger('amount');
 
-        const currentCoins = await getCoins(guildId, userId);
+        const currentCoins = await getCoins(userId); // guildIdを削除
 
         if (currentCoins < betAmount) {
             return interaction.editReply({ content: `いんコインが足りません！現在 ${currentCoins.toLocaleString()} いんコイン持っています。` });
@@ -1143,12 +1135,12 @@ const gamblingCommand = {
             return interaction.editReply({ content: '賭け金が0いんコインではギャンブルできません。' });
         }
 
-        await addCoins(guildId, userId, -betAmount);
+        await addCoins(userId, -betAmount); // guildIdを削除
 
         const multiplier = Math.random() * 2.35 + 0.005;
         let winAmount = Math.floor(betAmount * multiplier);
         
-        const newCoins = await addCoins(guildId, userId, winAmount);
+        const newCoins = await addCoins(userId, winAmount); // guildIdを削除
 
         const embed = new EmbedBuilder()
             .setTitle('いんコインギャンブル結果')
@@ -1167,7 +1159,7 @@ const gamblingCommand = {
         } else {
             embed.setDescription(`はずれ... ${betAmount.toLocaleString()} いんコインが ${multiplier.toFixed(2)} 倍になり、${winAmount.toLocaleString()} いんコインになりました。`)
                  .setColor('#FF0000');
-            await addCreditPoints(guildId, userId, -1);
+            await addCreditPoints(userId, -1); // guildIdを削除
         }
 
         await interaction.editReply({ embeds: [embed] });
@@ -1197,7 +1189,7 @@ const moneyCommand = {
                 .setDescription('自分の現在の残高、銀行残高、信用ポイントを表示します。')),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
@@ -1207,7 +1199,7 @@ const moneyCommand = {
         if (subcommand === 'help') {
             const helpEmbed = new EmbedBuilder()
                 .setTitle('いんコインコマンドヘルプ')
-                .setDescription('利用可能なコマンドとその説明です。')
+                .setDescription('利用可能なコマンドとその説明です。\n**データはどのサーバーでも共通で利用できます。**') // 共通であることを追記
                 .setColor('ADFF2F')
                 .addFields(
                     { name: '/money balance [user]', value: '自分または他のユーザーの所持金を表示します。', inline: false },
@@ -1227,7 +1219,7 @@ const moneyCommand = {
         } else if (subcommand === 'balance') {
             const targetUser = interaction.options.getUser('user') || interaction.user;
             const targetUserId = targetUser.id;
-            const targetUserCoins = await getCoins(guildId, targetUserId);
+            const targetUserCoins = await getCoins(targetUserId); // guildIdを削除
 
             const embed = new EmbedBuilder()
                 .setTitle('いんコイン残高')
@@ -1238,9 +1230,9 @@ const moneyCommand = {
 
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'info') {
-            const currentCoins = await getCoins(guildId, userId);
-            const bankCoins = await getBankCoins(guildId, userId);
-            const creditPoints = await getCreditPoints(guildId, userId);
+            const currentCoins = await getCoins(userId); // guildIdを削除
+            const bankCoins = await getBankCoins(userId); // guildIdを削除
+            const creditPoints = await getCreditPoints(userId); // guildIdを削除
 
             const embed = new EmbedBuilder()
                 .setTitle(`${interaction.user.username} さんの情報`)
@@ -1268,13 +1260,13 @@ const workCommand = {
         .setDescription('2時間に1回、いんコインを稼ぎます。'),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const now = Date.now();
-        const lastWork = await getUserLastWorkTime(guildId, userId);
+        const lastWork = await getUserLastWorkTime(userId); // guildIdを削除
 
         if (now - lastWork < WORK_COOLDOWN_MS) {
             const timeLeft = WORK_COOLDOWN_MS - (now - lastWork);
@@ -1283,8 +1275,8 @@ const workCommand = {
         }
 
         let earnedAmount;
-        const userJob = await getUserJob(guildId, userId) || "無職";
-        const userData = await getUserData(guildId, userId);
+        const userJob = await getUserJob(userId) || "無職"; // guildIdを削除
+        const userData = await getUserData(userId); // guildIdを削除
         const creditPoints = userData.creditPoints;
 
         if (userJob && jobSettings.has(userJob)) {
@@ -1300,7 +1292,7 @@ const workCommand = {
             } else if (userJob === "社長") {
                 const companyId = userData.companyId;
                 if (companyId) {
-                    const companyData = await getCompanyData(guildId, companyId);
+                    const companyData = await getCompanyData(companyId); // guildIdを削除
                     if (companyData && companyData.ownerId === userId) {
                         const numMembers = companyData.members.length;
                         const { minBase, maxBase, memberBonus } = jobSettings.get("社長");
@@ -1320,31 +1312,31 @@ const workCommand = {
         
         const userCompanyId = userData.companyId;
         if (userCompanyId) {
-            const companyData = await getCompanyData(guildId, userCompanyId);
+            const companyData = await getCompanyData(userCompanyId); // guildIdを削除
             if (companyData && companyData.autoDeposit) {
-                await updateCompanyDataField(guildId, userCompanyId, 'budget', companyData.budget + earnedAmount);
+                await updateCompanyDataField(userCompanyId, 'budget', companyData.budget + earnedAmount); // guildIdを削除
                 const embed = new EmbedBuilder()
                     .setTitle('お仕事結果')
                     .setColor('#00FF00')
                     .setDescription(`お疲れ様です！ ${earnedAmount.toLocaleString()} いんコインを獲得しました。\nこの金額は、自動で会社「${companyData.name}」の予算に入金されました。`)
                     .addFields(
-                        { name: 'あなたの所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: false },
-                        { name: '会社の予算', value: `${(await getCompanyData(guildId, userCompanyId)).budget.toLocaleString()} いんコイン`, inline: false },
-                        { name: '信用ポイント', value: `${await getCreditPoints(guildId, userId)}`, inline: false }
+                        { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
+                        { name: '会社の予算', value: `${(await getCompanyData(userCompanyId)).budget.toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
+                        { name: '信用ポイント', value: `${await getCreditPoints(userId)}`, inline: false } // guildIdを削除
                     )
                     .setTimestamp()
                     .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
                 await interaction.editReply({ embeds: [embed] });
-                await addCreditPoints(guildId, userId, 1);
-                await setUserLastWorkTime(guildId, userId, now);
+                await addCreditPoints(userId, 1); // guildIdを削除
+                await setUserLastWorkTime(userId, now); // guildIdを削除
                 return;
             }
         }
 
-        const newCoins = await addCoins(guildId, userId, earnedAmount);
-        await addCreditPoints(guildId, userId, 1);
+        const newCoins = await addCoins(userId, earnedAmount); // guildIdを削除
+        await addCreditPoints(userId, 1); // guildIdを削除
 
-        await setUserLastWorkTime(guildId, userId, now);
+        await setUserLastWorkTime(userId, now); // guildIdを削除
 
         const embed = new EmbedBuilder()
             .setTitle('お仕事結果')
@@ -1352,7 +1344,7 @@ const workCommand = {
             .setDescription(`お疲れ様です！ ${earnedAmount.toLocaleString()} いんコインを獲得しました。`)
             .addFields(
                 { name: '現在の残高', value: `${newCoins.toLocaleString()} いんコイン`, inline: false },
-                { name: '信用ポイント', value: `${await getCreditPoints(guildId, userId)}`, inline: false }
+                { name: '信用ポイント', value: `${await getCreditPoints(userId)}`, inline: false } // guildIdを削除
             )
             .setTimestamp()
             .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -1374,13 +1366,13 @@ const robCommand = {
                 .setRequired(true)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const robberUser = interaction.user;
-        const creditPoints = await getCreditPoints(guildId, robberUser.id);
+        const creditPoints = await getCreditPoints(robberUser.id); // guildIdを削除
 
         if (creditPoints < 0) {
             return interaction.editReply({ content: '信用ポイントが負のため、強盗はできません。' });
@@ -1388,7 +1380,7 @@ const robCommand = {
 
         const targetUser = interaction.options.getUser('target');
         const now = Date.now();
-        const lastRob = await getUserLastRobTime(guildId, robberUser.id);
+        const lastRob = await getUserLastRobTime(robberUser.id); // guildIdを削除
 
         if (now - lastRob < ROB_COOLDOWN_MS) {
             const timeLeft = ROB_COOLDOWN_MS - (now - lastRob);
@@ -1405,8 +1397,8 @@ const robCommand = {
             return interaction.editReply({ content: 'ボットからいんコインを盗むことはできません！' });
         }
 
-        const targetCoins = await getCoins(guildId, targetUser.id);
-        const robberCoins = await getCoins(guildId, robberUser.id);
+        const targetCoins = await getCoins(targetUser.id); // guildIdを削除
+        const robberCoins = await getCoins(robberUser.id); // guildIdを削除
 
         if (targetCoins <= 0) {
             return interaction.editReply({ content: `${targetUser.username} さんは現在いんコインを持っていません。` });
@@ -1420,34 +1412,34 @@ const robCommand = {
             .setTimestamp()
             .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
 
-        await setUserLastRobTime(guildId, robberUser.id, now);
+        await setUserLastRobTime(robberUser.id, now); // guildIdを削除
 
         if (isSuccess) {
             const stolenPercentage = Math.random() * (0.65 - 0.50) + 0.50;
             const stolenAmount = Math.floor(targetCoins * stolenPercentage);
 
-            await addCoins(guildId, targetUser.id, -stolenAmount);
-            await addCoins(guildId, robberUser.id, stolenAmount);
-            await addCreditPoints(guildId, robberUser.id, -5);
+            await addCoins(targetUser.id, -stolenAmount); // guildIdを削除
+            await addCoins(robberUser.id, stolenAmount); // guildIdを削除
+            await addCreditPoints(robberUser.id, -5); // guildIdを削除
 
             embed.setDescription(`強盗成功！ ${targetUser.username} さんから **${stolenAmount.toLocaleString()}** いんコインを盗みました！`)
                  .addFields(
-                     { name: `${robberUser.username} の現在の残高`, value: `${(await getCoins(guildId, robberUser.id)).toLocaleString()} いんコイン`, inline: true },
-                     { name: `${targetUser.username} の現在の残高`, value: `${(await getCoins(guildId, targetUser.id)).toLocaleString()} いんコイン`, inline: true },
-                     { name: 'あなたの信用ポイント', value: `${await getCreditPoints(guildId, robberUser.id)}`, inline: false }
+                     { name: `${robberUser.username} の現在の残高`, value: `${(await getCoins(robberUser.id)).toLocaleString()} いんコイン`, inline: true }, // guildIdを削除
+                     { name: `${targetUser.username} の現在の残高`, value: `${(await getCoins(targetUser.id)).toLocaleString()} いんコイン`, inline: true }, // guildIdを削除
+                     { name: 'あなたの信用ポイント', value: `${await getCreditPoints(robberUser.id)}`, inline: false } // guildIdを削除
                  )
                  .setColor('#00FF00');
         } else {
             const penaltyPercentage = Math.random() * (0.45 - 0.30) + 0.30;
             const penaltyAmount = Math.floor(robberCoins * penaltyPercentage);
-            const newRobberCoins = await addCoins(guildId, robberUser.id, -penaltyAmount);
-            await addCreditPoints(guildId, robberUser.id, -3);
+            const newRobberCoins = await addCoins(robberUser.id, -penaltyAmount); // guildIdを削除
+            await addCreditPoints(robberUser.id, -3); // guildIdを削除
 
             embed.setDescription(`強盗失敗... ${targetUser.username} さんからいんコインを盗むことができませんでした。
 罰金として **${penaltyAmount.toLocaleString()}** いんコインを失いました。`)
                  .addFields(
                      { name: `${robberUser.username} の現在の残高`, value: `${newRobberCoins.toLocaleString()} いんコイン`, inline: false },
-                     { name: 'あなたの信用ポイント', value: `${await getCreditPoints(guildId, robberUser.id)}`, inline: false }
+                     { name: 'あなたの信用ポイント', value: `${await getCreditPoints(robberUser.id)}`, inline: false } // guildIdを削除
                  )
                  .setColor('#FF0000');
         }
@@ -1468,28 +1460,28 @@ const depositCommand = {
                 .setMinValue(1)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const amount = interaction.options.getInteger('amount');
-        const currentCoins = await getCoins(guildId, userId);
+        const currentCoins = await getCoins(userId); // guildIdを削除
 
         if (currentCoins < amount) {
             return interaction.editReply({ content: `所持金が足りません！現在 ${currentCoins.toLocaleString()} いんコイン持っています。` });
         }
 
-        await addCoins(guildId, userId, -amount);
-        await addBankCoins(guildId, userId, amount);
+        await addCoins(userId, -amount); // guildIdを削除
+        await addBankCoins(userId, amount); // guildIdを削除
 
         const embed = new EmbedBuilder()
             .setTitle('預金完了')
             .setColor('#00FF00')
             .setDescription(`${amount.toLocaleString()} いんコインを銀行に預けました。`)
             .addFields(
-                { name: '現在の所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: true },
-                { name: '現在の銀行残高', value: `${(await getBankCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: true }
+                { name: '現在の所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: true }, // guildIdを削除
+                { name: '現在の銀行残高', value: `${(await getBankCoins(userId)).toLocaleString()} いんコイン`, inline: true } // guildIdを削除
             )
             .setTimestamp()
             .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -1510,28 +1502,28 @@ const withdrawCommand = {
                 .setMinValue(1)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const amount = interaction.options.getInteger('amount');
-        const currentBankCoins = await getBankCoins(guildId, userId);
+        const currentBankCoins = await getBankCoins(userId); // guildIdを削除
 
         if (currentBankCoins < amount) {
             return interaction.editReply({ content: `銀行残高が足りません！現在 ${currentBankCoins.toLocaleString()} いんコインが銀行にあります。` });
         }
 
-        await addBankCoins(guildId, userId, -amount);
-        await addCoins(guildId, userId, amount);
+        await addBankCoins(userId, -amount); // guildIdを削除
+        await addCoins(userId, amount); // guildIdを削除
 
         const embed = new EmbedBuilder()
             .setTitle('引き出し完了')
             .setColor('#00FF00')
             .setDescription(`${amount.toLocaleString()} いんコインを銀行から引き出しました。`)
             .addFields(
-                { name: '現在の所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: true },
-                { name: '現在の銀行残高', value: `${(await getBankCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: true }
+                { name: '現在の所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: true }, // guildIdを削除
+                { name: '現在の銀行残高', value: `${(await getBankCoins(userId)).toLocaleString()} いんコイン`, inline: true } // guildIdを削除
             )
             .setTimestamp()
             .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -1560,7 +1552,7 @@ const addMoneyCommand = {
                 .setRequired(false)),
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
@@ -1578,14 +1570,14 @@ const addMoneyCommand = {
 
         let replyMessage = '';
         if (targetUser) {
-            const newCoins = await addCoins(guildId, targetUser.id, amount);
+            const newCoins = await addCoins(targetUser.id, amount); // guildIdを削除
             replyMessage = `${targetUser.username} に ${amount.toLocaleString()} いんコインを追加しました。\n現在の残高: ${newCoins.toLocaleString()} いんコイン`;
         } else if (targetRole) {
             await interaction.guild.members.fetch();
             const members = interaction.guild.members.cache.filter(member => member.roles.cache.has(targetRole.id) && !member.user.bot);
             let addedCount = 0;
             for (const member of members.values()) {
-                await addCoins(guildId, member.id, amount);
+                await addCoins(member.id, amount); // guildIdを削除
                 addedCount++;
             }
             replyMessage = `${targetRole.name} ロールの ${addedCount} 人のメンバーに ${amount.toLocaleString()} いんコインを追加しました。`;
@@ -1622,7 +1614,7 @@ const removeMoneyCommand = {
                 .setRequired(false)),
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
@@ -1640,14 +1632,14 @@ const removeMoneyCommand = {
 
         let replyMessage = '';
         if (targetUser) {
-            const newCoins = await addCoins(guildId, targetUser.id, -amount);
+            const newCoins = await addCoins(targetUser.id, -amount); // guildIdを削除
             replyMessage = `${targetUser.username} から ${amount.toLocaleString()} いんコインを削除しました。\n現在の残高: ${newCoins.toLocaleString()} いんコイン`;
         } else if (targetRole) {
             await interaction.guild.members.fetch();
             const members = interaction.guild.members.cache.filter(member => member.roles.cache.has(targetRole.id) && !member.user.bot);
             let removedCount = 0;
             for (const member of members.values()) {
-                await addCoins(guildId, member.id, -amount);
+                await addCoins(member.id, -amount); // guildIdを削除
                 removedCount++;
             }
             replyMessage = `${targetRole.name} ロールの ${removedCount} 人のメンバーからそれぞれ ${amount.toLocaleString()} いんコインを削除しました。`;
@@ -1684,7 +1676,7 @@ const giveMoneyCommand = {
                 .setRequired(false)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
@@ -1720,7 +1712,7 @@ const giveMoneyCommand = {
         }
 
         const totalCost = amount * affectedUsers.length;
-        const giverCoins = await getCoins(guildId, giverUser.id);
+        const giverCoins = await getCoins(giverUser.id); // guildIdを削除
 
         if (giverCoins < totalCost) {
             const embed = new EmbedBuilder()
@@ -1732,17 +1724,17 @@ const giveMoneyCommand = {
             return interaction.editReply({ embeds: [embed] });
         }
 
-        await addCoins(guildId, giverUser.id, -totalCost);
+        await addCoins(giverUser.id, -totalCost); // guildIdを削除
 
         let replyMessage = '';
         if (targetUser) {
-            await addCoins(guildId, targetUser.id, amount);
-            replyMessage = `${targetUser.username} に ${amount.toLocaleString()} いんコインを渡しました。\n${giverUser.username} の現在の残高: ${(await getCoins(guildId, giverUser.id)).toLocaleString()} いんコイン\n${targetUser.username} の現在の残高: ${(await getCoins(guildId, targetUser.id)).toLocaleString()} いんコイン`;
+            await addCoins(targetUser.id, amount); // guildIdを削除
+            replyMessage = `${targetUser.username} に ${amount.toLocaleString()} いんコインを渡しました。\n${giverUser.username} の現在の残高: ${(await getCoins(giverUser.id)).toLocaleString()} いんコイン\n${targetUser.username} の現在の残高: ${(await getCoins(targetUser.id)).toLocaleString()} いんコイン`; // guildIdを削除
         } else if (targetRole) {
             for (const user of affectedUsers) {
-                await addCoins(guildId, user.id, amount);
+                await addCoins(user.id, amount); // guildIdを削除
             }
-            replyMessage = `${targetRole.name} ロールの ${affectedUsers.length} 人のメンバーにそれぞれ ${amount.toLocaleString()} いんコインを渡しました。\n${giverUser.username} の現在の残高: ${(await getCoins(guildId, giverUser.id)).toLocaleString()} いんコイン`;
+            replyMessage = `${targetRole.name} ロールの ${affectedUsers.length} 人のメンバーにそれぞれ ${amount.toLocaleString()} いんコインを渡しました。\n${giverUser.username} の現在の残高: ${(await getCoins(giverUser.id)).toLocaleString()} いんコイン`; // guildIdを削除
         }
 
         const embed = new EmbedBuilder()
@@ -1777,6 +1769,7 @@ const channelMoneyCommand = {
                 .setMinValue(0)),
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
     async execute(interaction) {
+        // このコマンドはギルド固有のデータなのでguildIdを維持
         const guildId = interaction.guild.id;
         const channel = interaction.options.getChannel('channel');
         const minAmount = interaction.options.getInteger('min');
@@ -1797,7 +1790,6 @@ const channelMoneyCommand = {
         const saveSuccess = await saveChannelRewardDataToFirestore(guildId, channel.id, { min: minAmount, max: maxAmount });
 
         if (!saveSuccess) {
-            // エラーの種類に応じてメッセージを細分化
             const docRef = getChannelRewardDocRef(guildId, channel.id);
             if (!docRef) {
                 return interaction.editReply({ content: 'チャンネル報酬の設定に失敗しました。ボットのデータベース接続が不安定な可能性があります。もう一度お試しください。', ephemeral: true });
@@ -1853,13 +1845,13 @@ const jobsCommand = {
                 .setDescription('自分の現在の職業を表示します。')),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const subcommand = interaction.options.getSubcommand();
-        const userData = await getUserData(guildId, userId);
+        const userData = await getUserData(userId); // guildIdを削除
         const creditPoints = userData.creditPoints;
 
         if (subcommand === 'assign') {
@@ -1875,7 +1867,7 @@ const jobsCommand = {
                 return interaction.editReply({ content: `職業 **${jobName}** は存在しません。設定済みの職業から選択してください。` });
             }
 
-            await setUserJob(guildId, targetUser.id, jobName);
+            await setUserJob(targetUser.id, jobName); // guildIdを削除
             await interaction.editReply({ content: `${targetUser.username} に職業 **${jobName}** を割り当てました。` });
 
         } else if (subcommand === 'remove') {
@@ -1884,14 +1876,14 @@ const jobsCommand = {
             }
             const targetUser = interaction.options.getUser('user');
             
-            const targetUserData = await getUserData(guildId, targetUser.id);
+            const targetUserData = await getUserData(targetUser.id); // guildIdを削除
             if (!targetUserData.job || targetUserData.job === "無職") {
                 return interaction.editReply({ content: `${targetUser.username} には現在、職業が割り当てられていません。` });
             }
             if (targetUserData.job === "社長") {
                  return interaction.editReply({ content: '「社長」の職業を削除するには、先に会社を削除するか、他のユーザーに社長を引き継ぐ必要があります。' });
             }
-            await setUserJob(guildId, targetUser.id, "無職");
+            await setUserJob(targetUser.id, "無職"); // guildIdを削除
             await interaction.editReply({ content: `${targetUser.username} から職業を削除し、「無職」に戻しました。` });
 
         } else if (subcommand === 'list') {
@@ -1924,7 +1916,7 @@ const jobsCommand = {
             await interaction.editReply({ embeds: [embed] });
 
         } else if (subcommand === 'my-job') {
-            const currentJob = await getUserJob(guildId, userId) || "無職";
+            const currentJob = await getUserJob(userId) || "無職"; // guildIdを削除
             let message;
             if (currentJob) {
                 if (currentJob === "Youtuber") {
@@ -1941,7 +1933,7 @@ const jobsCommand = {
                 } else if (currentJob === "社長") {
                     const companyId = userData.companyId;
                     if (companyId) {
-                        const companyData = await getCompanyData(guildId, companyId);
+                        const companyData = await getCompanyData(companyId); // guildIdを削除
                         if (companyData && companyData.ownerId === userId) {
                             const numMembers = companyData.members.length;
                             const { minBase, maxBase, memberBonus } = jobSettings.get("社長");
@@ -1979,13 +1971,13 @@ const jobChangeCommand = {
                 .setAutocomplete(true)),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
         const requestedJob = interaction.options.getString('job_name');
-        const currentJob = await getUserJob(guildId, userId) || "無職";
+        const currentJob = await getUserJob(userId) || "無職"; // guildIdを削除
 
         if (currentJob === "社長") {
             return interaction.editReply({ content: 'あなたは会社の社長です。「社長」の職業を辞めるには、まず会社を削除するか、他のユーザーに社長を引き継ぐ必要があります。' });
@@ -2006,21 +1998,21 @@ const jobChangeCommand = {
             return interaction.editReply({ content: `職業 **${requestedJob}** の転職費用が設定されていません。` });
         }
 
-        const currentCoins = await getCoins(guildId, userId);
+        const currentCoins = await getCoins(userId); // guildIdを削除
 
         if (currentCoins < cost) {
             return interaction.editReply({ content: `転職費用が足りません！\n**${requestedJob}** への転職には **${cost.toLocaleString()}** いんコイン必要ですが、あなたは **${currentCoins.toLocaleString()}** いんコインしか持っていません。` });
         }
 
-        await addCoins(guildId, userId, -cost);
-        await setUserJob(guildId, userId, requestedJob);
+        await addCoins(userId, -cost); // guildIdを削除
+        await setUserJob(userId, requestedJob); // guildIdを削除
 
         const embed = new EmbedBuilder()
             .setTitle('転職成功！')
             .setColor('#00FF00')
             .setDescription(`あなたは **${requestedJob}** に転職しました！\n費用として **${cost.toLocaleString()}** いんコインを支払いました。`)
             .addFields(
-                { name: '現在の所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: false }
+                { name: '現在の所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false } // guildIdを削除
             )
             .setTimestamp()
             .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2040,31 +2032,32 @@ const loadCommand = {
                 .setDescription('情報を取得したいユーザー')
                 .setRequired(false))
         .addBooleanOption(option => 
-            option.setName('guild_data')
-                .setDescription('このギルドの全てのユーザーと会社のいんコイン情報を再取得します。(管理者のみ)')
+            option.setName('all_data') // オプション名を'all_data'に変更
+                .setDescription('全てのユーザーと会社のいんコイン情報を再取得します。(管理者のみ)')
                 .setRequired(false)),
     default_member_permissions: null, 
     async execute(interaction) {
+        // guildIdはユーザーデータの取得・保存には不要だが、チャンネル報酬には必要なので取得
         const guildId = interaction.guild.id;
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
         }
 
-        const loadGuildData = interaction.options.getBoolean('guild_data');
+        const loadAllData = interaction.options.getBoolean('all_data'); // オプション名を変更
         const targetUser = interaction.options.getUser('user');
 
-        if (loadGuildData) {
+        if (loadAllData) {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.editReply({ content: 'このコマンドで全てのギルド情報を再取得するには管理者権限が必要です。' });
+                return interaction.editReply({ content: 'このコマンドで全てのいんコイン情報を再取得するには管理者権限が必要です。' });
             }
             if (targetUser) {
-                 return interaction.editReply({ content: '「全てのギルドデータ」と特定のユーザーを同時に指定することはできません。' });
+                 return interaction.editReply({ content: '「全てのデータ」と特定のユーザーを同時に指定することはできません。' });
             }
 
-            const { users: loadedUsersCount, companies: loadedCompaniesCount, stocks: loadedStocksCount, channelRewards: loadedChannelRewardsCount } = await syncGuildDataFromFirestore(guildId); 
+            const { users: loadedUsersCount, companies: loadedCompaniesCount, stocks: loadedStocksCount, channelRewards: loadedChannelRewardsCount } = await syncAllDataFromFirestore(); // 関数名を変更
             const embed = new EmbedBuilder()
-                .setTitle(`ギルド「${interaction.guild.name}」のいんコイン情報一括再取得`)
+                .setTitle(`いんコイン情報一括再取得`)
                 .setColor('#00FF00')
                 .setDescription(`Firestoreから**${loadedUsersCount.toLocaleString()}人分**のユーザー情報、**${loadedCompaniesCount.toLocaleString()}件**の会社情報、**${loadedStocksCount.toLocaleString()}件**の株情報、**${loadedChannelRewardsCount.toLocaleString()}件**のチャンネル報酬情報を全て再取得し、キャッシュを更新しました。`) 
                 .setTimestamp()
@@ -2073,16 +2066,16 @@ const loadCommand = {
 
         } else if (targetUser) { 
             const targetUserId = targetUser.id;
-            const targetUserData = await getUserData(guildId, targetUserId); 
+            const targetUserData = await getUserData(targetUserId); // guildIdを削除
 
             if (!targetUserData.isRegistered) {
                 return interaction.editReply({ content: `${targetUser.username} さんはいんコインシステムに登録されていません。` });
             }
 
-            if (targetUserData.companyId && !getGuildCache(guildId).companyDataCache.has(targetUserData.companyId)) {
+            if (targetUserData.companyId && !companyDataCache.has(targetUserData.companyId)) { // グローバルキャッシュと比較
                 targetUserData.companyId = null;
                 targetUserData.job = '無職';
-                await saveUserDataToFirestore(guildId, targetUserId, targetUserData);
+                await saveUserDataToFirestore(targetUserId, targetUserData); // guildIdを削除
             }
 
             const embed = new EmbedBuilder()
@@ -2094,23 +2087,23 @@ const loadCommand = {
                     { name: '信用ポイント', value: `${targetUserData.creditPoints}`, inline: false },
                     { name: '職業', value: `${targetUserData.job}`, inline: false },
                     { name: 'チャンネル登録者数', value: `${targetUserData.subscribers.toLocaleString()} 人`, inline: false },
-                    { name: '所属会社', value: targetUserData.companyId ? (await getCompanyData(guildId, targetUserData.companyId))?.name || '不明' : 'なし', inline: false }
+                    { name: '所属会社', value: targetUserData.companyId ? (await getCompanyData(targetUserData.companyId))?.name || '不明' : 'なし', inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
             await interaction.editReply({ embeds: [embed] });
 
         } else { 
-            const currentUserData = await getUserData(guildId, userId); 
+            const currentUserData = await getUserData(userId); // guildIdを削除
 
             if (!currentUserData.isRegistered) {
                 return interaction.editReply({ content: 'あなたはいんコインシステムに登録されていません。`/register` コマンドで登録してください。' });
             }
 
-            if (currentUserData.companyId && !getGuildCache(guildId).companyDataCache.has(currentUserData.companyId)) {
+            if (currentUserData.companyId && !companyDataCache.has(currentUserData.companyId)) { // グローバルキャッシュと比較
                 currentUserData.companyId = null;
                 currentUserData.job = '無職';
-                await saveUserDataToFirestore(guildId, userId, currentUserData);
+                await saveUserDataToFirestore(userId, currentUserData); // guildIdを削除
             }
             
             const embed = new EmbedBuilder()
@@ -2122,7 +2115,7 @@ const loadCommand = {
                     { name: '信用ポイント', value: `${currentUserData.creditPoints}`, inline: false },
                     { name: '職業', value: `${currentUserData.job}`, inline: false },
                     { name: 'チャンネル登録者数', value: `${currentUserData.subscribers.toLocaleString()} 人`, inline: false },
-                    { name: '所属会社', value: currentUserData.companyId ? (await getCompanyData(guildId, currentUserData.companyId))?.name || '不明' : 'なし', inline: false }
+                    { name: '所属会社', value: currentUserData.companyId ? (await getCompanyData(currentUserData.companyId))?.name || '不明' : 'なし', inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2227,7 +2220,7 @@ const companyCommand = {
                 .setDescription('所属している会社を辞めます。')),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
@@ -2257,14 +2250,14 @@ const companyCommand = {
             const dailySalary = interaction.options.getInteger('daily_salary');
             const password = interaction.options.getString('password'); // パスワードオプションを取得
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const existingCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (existingCompany) {
                 return interaction.editReply({ content: 'その会社名は既に存在します。別の名前を試してください。' });
             }
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (userData.companyId) {
-                const currentCompany = await getCompanyData(guildId, userData.companyId);
+                const currentCompany = await getCompanyData(userData.companyId); // guildIdを削除
                 return interaction.editReply({ content: `あなたは既に会社「${currentCompany.name}」に所属しています。新しい会社を作成する前に、現在の会社を抜けるか削除してください。` });
             }
             const companyId = crypto.randomUUID();
@@ -2277,15 +2270,15 @@ const companyCommand = {
                 lastPayoutTime: Date.now(),
                 password: password, // パスワードを保存
             };
-            const saveSuccess = await saveCompanyDataToFirestore(guildId, companyId, newCompanyData);
+            const saveSuccess = await saveCompanyDataToFirestore(companyId, newCompanyData); // guildIdを削除
             if (!saveSuccess) {
                 return interaction.editReply({ content: '会社の設立中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
-            await updateUserDataField(guildId, userId, 'companyId', companyId);
-            await setUserJob(guildId, userId, "社長");
+            await updateUserDataField(userId, 'companyId', companyId); // guildIdを削除
+            await setUserJob(userId, "社長"); // guildIdを削除
             // 新しく作成された会社の株データも初期化
             const initialStockPrice = Math.floor(Math.random() * (STOCK_PRICE_MAX - STOCK_PRICE_MIN + 1)) + STOCK_PRICE_MIN;
-            await saveStockDataToFirestore(guildId, companyId, {
+            await saveStockDataToFirestore(companyId, { // guildIdを削除
                 ...defaultStockData,
                 companyId: companyId,
                 currentPrice: initialStockPrice,
@@ -2322,11 +2315,11 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             const newName = interaction.options.getString('new_name');
             const newPassword = interaction.options.getString('new_password');
 
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。' });
             }
-            let companyData = await getCompanyData(guildId, userData.companyId);
+            let companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (!companyData || companyData.ownerId !== userId) {
                 return interaction.editReply({ content: '会社の情報を変更できるのは社長のみです。' });
             }
@@ -2339,7 +2332,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             let replyMessages = [];
 
             if (newName) {
-                const allCompanies = await getAllCompaniesInGuild(guildId);
+                const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
                 const existingCompany = allCompanies.find(c => c.name.toLowerCase() === newName.toLowerCase() && c.id !== companyData.id);
                 if (existingCompany) {
                     return interaction.editReply({ content: 'その会社名は既に存在します。別の名前を試してください。' });
@@ -2352,7 +2345,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 replyMessages.push(newPassword === '' ? '会社のパスワードを削除しました。' : `会社のパスワードを更新しました。`);
             }
 
-            const saveSuccess = await saveCompanyDataToFirestore(guildId, companyData.id, { ...companyData, ...updateFields });
+            const saveSuccess = await saveCompanyDataToFirestore(companyData.id, { ...companyData, ...updateFields }); // guildIdを削除
             if (!saveSuccess) {
                 return interaction.editReply({ content: '会社情報の更新中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
@@ -2367,22 +2360,22 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
 
         } else if (subcommand === 'deposit') {
             const amount = interaction.options.getInteger('amount');
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。' });
             }
-            const currentCoins = await getCoins(guildId, userId);
+            const currentCoins = await getCoins(userId); // guildIdを削除
             if (currentCoins < amount) {
                 return interaction.editReply({ content: `所持金が足りません！現在 ${currentCoins.toLocaleString()} いんコイン持っています。` });
             }
-            const companyData = await getCompanyData(guildId, userData.companyId);
+            const companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (!companyData || !companyData.name) {
-                 await updateUserDataField(guildId, userId, 'companyId', null);
-                 await setUserJob(guildId, userId, "無職");
+                 await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                 await setUserJob(userId, "無職"); // guildIdを削除
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
             }
-            await addCoins(guildId, userId, -amount);
-            const updateSuccess = await updateCompanyDataField(guildId, userData.companyId, 'budget', companyData.budget + amount);
+            await addCoins(userId, -amount); // guildIdを削除
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'budget', companyData.budget + amount); // guildIdを削除
             if (!updateSuccess) {
                 return interaction.editReply({ content: '会社の予算への預け入れ中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
@@ -2390,59 +2383,59 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 .setTitle('会社予算に預け入れ')
                 .setColor('#00FF00')
                 .setDescription(`${amount.toLocaleString()} いんコインを会社「${companyData.name}」の予算に預け入れました。
-現在の会社予算: ${(await getCompanyData(guildId, userData.companyId)).budget.toLocaleString()} いんコイン
-あなたの所持金: ${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`)
+現在の会社予算: ${(await getCompanyData(userData.companyId)).budget.toLocaleString()} いんコイン
+あなたの所持金: ${(await getCoins(userId)).toLocaleString()} いんコイン`) // guildIdを削除
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'withdraw') {
             const amount = interaction.options.getInteger('amount');
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。' });
             }
-            const companyData = await getCompanyData(guildId, userData.companyId);
+            const companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (companyData.ownerId !== userId) {
                 return interaction.editReply({ content: '会社の予算から引き出しできるのは社長のみです。' });
             }
             if (!companyData || !companyData.name) {
-                 await updateUserDataField(guildId, userId, 'companyId', null);
-                 await setUserJob(guildId, userId, "無職");
+                 await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                 await setUserJob(userId, "無職"); // guildIdを削除
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
             }
             if (companyData.budget < amount) {
                 return interaction.editReply({ content: `会社の予算が足りません！現在 ${companyData.budget.toLocaleString()} いんコインが会社の予算にあります。` });
             }
-            const updateSuccess = await updateCompanyDataField(guildId, userData.companyId, 'budget', companyData.budget - amount);
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'budget', companyData.budget - amount); // guildIdを削除
             if (!updateSuccess) {
                 return interaction.editReply({ content: '会社の予算からの引き出し中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
-            await addCoins(guildId, userId, amount);
+            await addCoins(userId, amount); // guildIdを削除
             const embed = new EmbedBuilder()
                 .setTitle('会社予算から引き出し')
                 .setColor('#00FF00')
                 .setDescription(`${amount.toLocaleString()} いんコインを会社「${companyData.name}」の予算から引き出しました。
-現在の会社予算: ${(await getCompanyData(guildId, userData.companyId)).budget.toLocaleString()} いんコイン
-あなたの所持金: ${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`)
+現在の会社予算: ${(await getCompanyData(userData.companyId)).budget.toLocaleString()} いんコイン
+あなたの所持金: ${(await getCoins(userId)).toLocaleString()} いんコイン`) // guildIdを削除
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'alldeposit') {
             const toggle = interaction.options.getBoolean('toggle');
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。' });
             }
-            const companyData = await getCompanyData(guildId, userData.companyId);
+            const companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (companyData.ownerId !== userId) {
                 return interaction.editReply({ content: '自動入金を設定できるのは社長のみです。' });
             }
             if (!companyData || !companyData.name) {
-                 await updateUserDataField(guildId, userId, 'companyId', null);
-                 await setUserJob(guildId, userId, "無職");
+                 await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                 await setUserJob(userId, "無職"); // guildIdを削除
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
             }
-            const updateSuccess = await updateCompanyDataField(guildId, userData.companyId, 'autoDeposit', toggle);
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'autoDeposit', toggle); // guildIdを削除
             if (!updateSuccess) {
                 return interaction.editReply({ content: '自動入金設定の変更中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
@@ -2458,7 +2451,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             const companyName = interaction.options.getString('company_name');
             const providedPassword = interaction.options.getString('password'); // 提供されたパスワードを取得
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
@@ -2475,20 +2468,20 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                  return interaction.editReply({ content: 'この会社はパスワードで保護されていません。パスワードオプションは不要です。' });
             }
 
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (userData.companyId) {
-                const currentCompany = await getCompanyData(guildId, userData.companyId);
+                const currentCompany = await getCompanyData(userData.companyId); // guildIdを削除
                 return interaction.editReply({ content: `あなたは既に会社「${currentCompany.name}」に所属しています。新しい会社に参加する前に、現在の会社を抜けるか削除してください。` });
             }
             if (targetCompany.members.some(m => m.id === userId)) {
                 return interaction.editReply({ content: `あなたは既に会社「${companyName}」のメンバーです。` });
             }
             const updatedMembers = [...targetCompany.members, { id: userId, username: interaction.user.username }];
-            const saveSuccess = await saveCompanyDataToFirestore(guildId, targetCompany.id, { ...targetCompany, members: updatedMembers });
+            const saveSuccess = await saveCompanyDataToFirestore(targetCompany.id, { ...targetCompany, members: updatedMembers }); // guildIdを削除
             if (!saveSuccess) {
                 return interaction.editReply({ content: '会社への参加中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
-            await updateUserDataField(guildId, userId, 'companyId', targetCompany.id);
+            await updateUserDataField(userId, 'companyId', targetCompany.id); // guildIdを削除
             const embed = new EmbedBuilder()
                 .setTitle('会社に参加成功！')
                 .setColor('#00FF00')
@@ -2501,20 +2494,20 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             const companyNameOption = interaction.options.getString('company_name');
             let targetCompanyData = null;
             if (companyNameOption) {
-                const allCompanies = await getAllCompaniesInGuild(guildId);
+                const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
                 targetCompanyData = allCompanies.find(c => c.name.toLowerCase() === companyNameOption.toLowerCase());
                 if (!targetCompanyData) {
                     return interaction.editReply({ content: `会社「${companyNameOption}」は見つかりませんでした。` });
                 }
             } else {
-                const userData = await getUserData(guildId, userId);
+                const userData = await getUserData(userId); // guildIdを削除
                 if (!userData.companyId) {
                     return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。または、会社名を指定して情報を検索してください。' });
                 }
-                targetCompanyData = await getCompanyData(guildId, userData.companyId);
+                targetCompanyData = await getCompanyData(userData.companyId); // guildIdを削除
                 if (!targetCompanyData || !targetCompanyData.name) {
-                     await updateUserDataField(guildId, userId, 'companyId', null);
-                     await setUserJob(guildId, userId, "無職");
+                     await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                     await setUserJob(userId, "無職"); // guildIdを削除
                      return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
                 }
             }
@@ -2536,25 +2529,25 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'delete') {
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。' });
             }
-            const companyData = await getCompanyData(guildId, userData.companyId);
+            const companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (companyData.ownerId !== userId) {
                 return interaction.editReply({ content: '会社を削除できるのは社長のみです。' });
             }
             if (!companyData || !companyData.name) {
-                 await updateUserDataField(guildId, userId, 'companyId', null);
-                 await setUserJob(guildId, userId, "無職");
+                 await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                 await setUserJob(userId, "無職"); // guildIdを削除
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。' });
             }
             // 会社メンバーのcompanyIdをnullにリセットし、職業を「無職」に戻す
             for (const member of companyData.members) {
-                await updateUserDataField(guildId, member.id, 'companyId', null);
-                await setUserJob(guildId, member.id, "無職");
+                await updateUserDataField(member.id, 'companyId', null); // guildIdを削除
+                await setUserJob(member.id, "無職"); // guildIdを削除
             }
-            await deleteCompanyFromFirestore(guildId, userData.companyId);
+            await deleteCompanyFromFirestore(userData.companyId); // guildIdを削除
             const embed = new EmbedBuilder()
                 .setTitle('会社削除完了')
                 .setColor('#FF0000')
@@ -2563,15 +2556,15 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'leave') {
-            const userData = await getUserData(guildId, userId);
+            const userData = await getUserData(userId); // guildIdを削除
             if (!userData.companyId) {
                 return interaction.editReply({ content: 'あなたはどの会社にも所属していません。' });
             }
 
-            const companyData = await getCompanyData(guildId, userData.companyId);
+            const companyData = await getCompanyData(userData.companyId); // guildIdを削除
             if (!companyData || !companyData.name) {
-                await updateUserDataField(guildId, userId, 'companyId', null);
-                await setUserJob(guildId, userId, "無職");
+                await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+                await setUserJob(userId, "無職"); // guildIdを削除
                 return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。' });
             }
 
@@ -2580,13 +2573,13 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             }
 
             const updatedMembers = companyData.members.filter(member => member.id !== userId);
-            const saveSuccess = await saveCompanyDataToFirestore(guildId, companyData.id, { ...companyData, members: updatedMembers });
+            const saveSuccess = await saveCompanyDataToFirestore(companyData.id, { ...companyData, members: updatedMembers }); // guildIdを削除
             if (!saveSuccess) {
                 return interaction.editReply({ content: '会社からの脱退中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
             }
 
-            await updateUserDataField(guildId, userId, 'companyId', null);
-            await setUserJob(guildId, userId, "無職");
+            await updateUserDataField(userId, 'companyId', null); // guildIdを削除
+            await setUserJob(userId, "無職"); // guildIdを削除
 
             const embed = new EmbedBuilder()
                 .setTitle('会社を辞めました')
@@ -2601,7 +2594,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
 };
 client.commands.set(companyCommand.data.name, companyCommand);
 
-// === Stock Command ===
+// === Stock Command (modified to be global) ===
 const stockCommand = {
     data: new SlashCommandBuilder()
         .setName('stock')
@@ -2685,7 +2678,7 @@ const stockCommand = {
                         .setAutocomplete(true))),
     default_member_permissions: null,
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
@@ -2716,19 +2709,19 @@ const stockCommand = {
             const amount = interaction.options.getInteger('amount');
             const targetUser = interaction.options.getUser('user');
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            await addUserStocks(guildId, targetUser.id, targetCompany.id, amount);
+            await addUserStocks(targetUser.id, targetCompany.id, amount); // guildIdを削除
             const embed = new EmbedBuilder()
                 .setTitle('株付与完了')
                 .setColor('#00FF00')
                 .setDescription(`${targetUser.username} に会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株付与しました。`)
                 .addFields(
-                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(guildId, targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false }
+                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2741,24 +2734,24 @@ const stockCommand = {
             const amount = interaction.options.getInteger('amount');
             const targetUser = interaction.options.getUser('user');
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const userCurrentStocks = await getUserStocks(guildId, targetUser.id, targetCompany.id);
+            const userCurrentStocks = await getUserStocks(targetUser.id, targetCompany.id); // guildIdを削除
             if (userCurrentStocks < amount) {
                 return interaction.editReply({ content: `${targetUser.username} は会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株保有していません。（現在: ${userCurrentStocks.toLocaleString()} 株）` });
             }
 
-            await addUserStocks(guildId, targetUser.id, targetCompany.id, -amount);
+            await addUserStocks(targetUser.id, targetCompany.id, -amount); // guildIdを削除
             const embed = new EmbedBuilder()
                 .setTitle('株削除完了')
                 .setColor('#FF0000')
                 .setDescription(`${targetUser.username} から会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株削除しました。`)
                 .addFields(
-                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(guildId, targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false }
+                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2767,26 +2760,26 @@ const stockCommand = {
             const companyName = interaction.options.getString('company');
             const amount = interaction.options.getInteger('amount');
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(guildId, targetCompany.id);
+            const stockData = await getStockData(targetCompany.id); // guildIdを削除
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
             const currentPrice = stockData.currentPrice;
             const totalCost = amount * currentPrice;
-            const userCoins = await getCoins(guildId, userId);
+            const userCoins = await getCoins(userId); // guildIdを削除
 
             if (userCoins < totalCost) {
                 return interaction.editReply({ content: `いんコインが足りません！**${amount.toLocaleString()}** 株購入するには **${totalCost.toLocaleString()}** いんコイン必要ですが、あなたは **${userCoins.toLocaleString()}** いんコインしか持っていません。` });
             }
 
-            await addCoins(guildId, userId, -totalCost);
-            await addUserStocks(guildId, userId, targetCompany.id, amount);
+            await addCoins(userId, -totalCost); // guildIdを削除
+            await addUserStocks(userId, targetCompany.id, amount); // guildIdを削除
 
             const embed = new EmbedBuilder()
                 .setTitle('株購入完了')
@@ -2794,8 +2787,8 @@ const stockCommand = {
                 .setDescription(`会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株購入しました。
 費用: **${totalCost.toLocaleString()}** いんコイン（@${currentPrice.toLocaleString()} いんコイン/株）`)
                 .addFields(
-                    { name: 'あなたの所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: false },
-                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(guildId, userId, targetCompany.id)).toLocaleString()} 株`, inline: false }
+                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
+                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2805,26 +2798,26 @@ const stockCommand = {
             const companyName = interaction.options.getString('company');
             const amount = interaction.options.getInteger('amount');
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(guildId, targetCompany.id);
+            const stockData = await getStockData(targetCompany.id); // guildIdを削除
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
             const currentPrice = stockData.currentPrice;
-            const userCurrentStocks = await getUserStocks(guildId, userId, targetCompany.id);
+            const userCurrentStocks = await getUserStocks(userId, targetCompany.id); // guildIdを削除
 
             if (userCurrentStocks < amount) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株保有していません。（現在: ${userCurrentStocks.toLocaleString()} 株）` });
             }
 
             const totalEarnings = amount * currentPrice;
-            await addCoins(guildId, userId, totalEarnings);
-            await addUserStocks(guildId, userId, targetCompany.id, -amount);
+            await addCoins(userId, totalEarnings); // guildIdを削除
+            await addUserStocks(userId, targetCompany.id, -amount); // guildIdを削除
 
             const embed = new EmbedBuilder()
                 .setTitle('株売却完了')
@@ -2832,8 +2825,8 @@ const stockCommand = {
                 .setDescription(`会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株売却しました。
 収益: **${totalEarnings.toLocaleString()}** いんコイン（@${currentPrice.toLocaleString()} いんコイン/株）`)
                 .addFields(
-                    { name: 'あなたの所持金', value: `${(await getCoins(guildId, userId)).toLocaleString()} いんコイン`, inline: false },
-                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(guildId, userId, targetCompany.id)).toLocaleString()} 株`, inline: false }
+                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
+                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2841,13 +2834,13 @@ const stockCommand = {
         } else if (subcommand === 'info') {
             const companyName = interaction.options.getString('company');
 
-            const allCompanies = await getAllCompaniesInGuild(guildId);
+            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(guildId, targetCompany.id);
+            const stockData = await getStockData(targetCompany.id); // guildIdを削除
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
@@ -3078,8 +3071,6 @@ const helpCommand = {
 };
 client.commands.set(helpCommand.data.name, helpCommand);
 
-const ticketPanelsConfig = new Map(); // key: panelId, value: { categoryId, roles }
-
 const ticketPanelCommand = {
     data: new SlashCommandBuilder()
         .setName('ticket-panel')
@@ -3215,6 +3206,9 @@ client.once('ready', async () => {
         console.log(`Firebase authenticated anonymously as: ${firebaseAuthUid}`);
     }
 
+    // 初回起動時に全てのデータを同期 (グローバルデータとギルド固有のチャンネル報酬)
+    await syncAllDataFromFirestore();
+
     // コマンド登録
     await registerCommands();
     client.user.setPresence({
@@ -3281,12 +3275,12 @@ client.on('interactionCreate', async interaction => {
                 return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。', ephemeral: true });
             }
             
-            // 登録チェック
+            // 登録チェック (グローバルに変わったため、ユーザーIDのみで確認)
             const nonAdminMoneyCommands = ['gambling', 'money', 'work', 'rob', 'give-money', 'deposit', 'withdraw', 'jobs', 'job-change', 'load', 'company', 'stock'];
             const isCompanyAddCommand = interaction.commandName === 'company' && interaction.options.getSubcommand() === 'add';
 
             if (nonAdminMoneyCommands.includes(interaction.commandName) && interaction.commandName !== 'register' && !isCompanyAddCommand) {
-                const userData = await getUserData(interaction.guild.id, interaction.user.id);
+                const userData = await getUserData(interaction.user.id); // guildIdを削除
                 if (!userData.isRegistered) {
                     return interaction.editReply({ content: 'このコマンドを使用するには、まず `/register` コマンドでいんコインシステムに登録してください。', ephemeral: true });
                 }
@@ -3294,21 +3288,21 @@ client.on('interactionCreate', async interaction => {
 
             await command.execute(interaction);
 
-            const guildId = interaction.guild.id;
+            // 信用ポイントが負になった場合の処理 (グローバル)
             const userId = interaction.user.id;
-            const creditPoints = await getCreditPoints(guildId, userId); 
-            const punishedForNegativeCredit = await getUserPunishedForNegativeCredit(guildId, userId); 
+            const creditPoints = await getCreditPoints(userId); 
+            const punishedForNegativeCredit = await getUserPunishedForNegativeCredit(userId); 
             if (creditPoints < 0 && !punishedForNegativeCredit) {
                 const guild = interaction.guild;
                 if (guild) {
                     const member = await guild.members.fetch(userId).catch(() => null);
                     if (member) {
-                        const initialBankCoins = await getBankCoins(guildId, userId); 
-                        const initialCurrentCoins = await getCoins(guildId, userId); 
+                        const initialBankCoins = await getBankCoins(userId); 
+                        const initialCurrentCoins = await getCoins(userId); 
                         const totalAvailableCoins = initialBankCoins + initialCurrentCoins;
 
                         if (totalAvailableCoins <= 0) {
-                            console.log(`User ${userId} in guild ${guildId} has 0 or negative total coins, skipping negative credit penalty.`);
+                            console.log(`User ${userId} has 0 or negative total coins, skipping negative credit penalty.`);
                             return; 
                         }
 
@@ -3324,14 +3318,14 @@ client.on('interactionCreate', async interaction => {
 
                         if (initialBankCoins > 0) {
                             deductedFromBank = Math.min(initialBankCoins, intendedTotalDeduction);
-                            await addBankCoins(guildId, userId, -deductedFromBank); 
+                            await addBankCoins(userId, -deductedFromBank); 
                             actualTotalDeducted += deductedFromBank;
                         }
                         
                         const remainingPenaltyToDeduct = intendedTotalDeduction - deductedFromBank;
                         if (remainingPenaltyToDeduct > 0) { 
                             deductedFromCurrent = Math.min(initialCurrentCoins, remainingPenaltyToDeduct);
-                            await addCoins(guildId, userId, -deductedFromCurrent); 
+                            await addCoins(userId, -deductedFromCurrent); 
                             actualTotalDeducted += deductedFromCurrent;
                         }
 
@@ -3347,15 +3341,15 @@ client.on('interactionCreate', async interaction => {
                             dmMessage = `信用ポイントが負になりましたが、いんコインが少なかったため、差し引かれたいんコインはありませんでした。`;
                         }
 
-                        await updateUserDataField(guildId, userId, 'creditPoints', -10); 
-                        await setUserPunishedForNegativeCredit(guildId, userId, true); 
+                        await updateUserDataField(userId, 'creditPoints', -10); 
+                        await setUserPunishedForNegativeCredit(userId, true); 
 
                         const dmEmbed = new EmbedBuilder()
                             .setTitle('信用ポイント低下による処罰')
                             .setDescription(`${dmMessage}
-あなたの現在の所持金は **${(await getCoins(guildId, userId)).toLocaleString()}** いんコインです。
-あなたの銀行残高は現在 **${(await getBankCoins(guildId, userId)).toLocaleString()}** いんコインです。
-信用ポイントは **${(await getCreditPoints(guildId, userId))}** にリセットされました。`) 
+あなたの現在の所持金は **${(await getCoins(userId)).toLocaleString()}** いんコインです。
+あなたの銀行残高は現在 **${(await getBankCoins(userId)).toLocaleString()}** いんコインです。
+信用ポイントは **${(await getCreditPoints(userId))}** にリセットされました。`) 
                             .setColor('#FF0000')
                             .setTimestamp();
                         
@@ -3377,7 +3371,7 @@ client.on('interactionCreate', async interaction => {
             }
         }
     } else if (interaction.isAutocomplete()) {
-        const guildId = interaction.guild.id;
+        const guildId = interaction.guild.id; // チャンネル報酬はギルド固有なので必要
         if (interaction.commandName === 'jobs' && interaction.options.getSubcommand() === 'assign') {
             const focusedOption = interaction.options.getFocused(true);
             if (focusedOption.name === 'job_name') {
@@ -3411,7 +3405,7 @@ client.on('interactionCreate', async interaction => {
         } else if (interaction.commandName === 'company' && (interaction.options.getSubcommand() === 'join' || interaction.options.getSubcommand() === 'info')) {
             const focusedOption = interaction.options.getFocused(true);
             if (focusedOption.name === 'company_name') {
-                const allCompanies = await getAllCompaniesInGuild(guildId);
+                const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
                 const filtered = allCompanies.filter(company =>
                     company.name.toLowerCase().startsWith(focusedOption.value.toLowerCase())
                 ).map(company => ({ name: `${company.name}（日給 ${company.dailySalary.toLocaleString()}コイン）`, value: company.name }));
@@ -3420,11 +3414,10 @@ client.on('interactionCreate', async interaction => {
         } else if (interaction.commandName === 'stock' && (interaction.options.getSubcommand() === 'add' || interaction.options.getSubcommand() === 'remove' || interaction.options.getSubcommand() === 'buy' || interaction.options.getSubcommand() === 'sell' || interaction.options.getSubcommand() === 'info')) {
             const focusedOption = interaction.options.getFocused(true);
             if (focusedOption.name === 'company') {
-                const allCompanies = await getAllCompaniesInGuild(guildId);
-                const guildCache = getGuildCache(guildId);
+                const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
                 const filtered = allCompanies.filter(company =>
                     company.name.toLowerCase().startsWith(focusedOption.value.toLowerCase())
-                ).map(company => ({ name: `${company.name} (株価: ${(guildCache.stockDataCache.get(company.id)?.currentPrice || defaultStockData.currentPrice).toLocaleString()}いんコイン)`, value: company.name }));
+                ).map(company => ({ name: `${company.name} (株価: ${(stockDataCache.get(company.id)?.currentPrice || defaultStockData.currentPrice).toLocaleString()}いんコイン)`, value: company.name })); // グローバルキャッシュを使用
                 await interaction.respond(filtered);
             }
         }
@@ -3601,21 +3594,22 @@ client.on('interactionCreate', async interaction => {
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.guild) return;
 
+    // チャンネル報酬はギルド固有なのでguildIdを維持
     const guildId = message.guild.id;
     const channelId = message.channel.id;
-    // チャンネル報酬設定をFirestoreから取得するように変更
-    const rewardConfig = await getChannelRewardData(guildId, channelId);
+    // チャンネル報酬設定をFirestoreから取得
+    const rewardConfig = await getChannelRewardData(guildId, channelId); // guildIdを維持
 
     if (rewardConfig && rewardConfig.min !== 0 && rewardConfig.max !== 0) { // min/maxが0でないことを確認
         let earnedAmount = Math.floor(Math.random() * (rewardConfig.max - rewardConfig.min + 1)) + rewardConfig.min;
 
-        const creditPoints = await getCreditPoints(guildId, message.author.id); 
+        const creditPoints = await getCreditPoints(message.author.id); // guildIdを削除
         if (creditPoints < 0) {
             earnedAmount = Math.floor(earnedAmount * 0.30);
             if (earnedAmount < 0) earnedAmount = 0; 
         }
 
-        await addCoins(guildId, message.author.id, earnedAmount);
+        await addCoins(message.author.id, earnedAmount); // guildIdを削除
     }
 });
 
