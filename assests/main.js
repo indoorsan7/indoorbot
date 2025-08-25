@@ -1,8 +1,9 @@
 import { Client, Collection, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, REST, Routes, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ActivityType } from 'discord.js';
 import http from 'http';
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+// FirebaseのインポートをESモジュール形式に修正
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously, signInWithCustomToken } from "firebase/auth";
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } from "firebase/firestore";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -43,6 +44,7 @@ let firebaseAuthUid = 'anonymous'; // Firebase Auth UID
 // === いんコインデータ（メモリにキャッシュされ、登録済みユーザーはFirestoreと同期されます） ===
 const userDataCache = new Map(); // key: discordUserId, value: { balances: number, bankBalances: number, ... }
 const companyDataCache = new Map(); // 会社データキャッシュ
+const channelChatRewards = new Map(); // チャンネルチャット報酬設定用（メモリ内データ）
 
 // ユーザーデータのデフォルト構造
 const defaultUserData = {
@@ -788,11 +790,9 @@ const gamblingCommand = {
         
         const userJob = await getUserJob(userId);
         if (userJob === "Youtuber") {
-            const jobSettingsForYoutuber = jobSettings.get("Youtuber");
             // Youtuberの獲得上限はギャンブルには適用しないため、capのチェックを削除
             // Youtuberはギャンブルの計算に影響しないため、このブロックは不要
         } else if (userJob === "社長") {
-             const jobSettingsForPresident = jobSettings.get("社長");
              // 社長の仕事はギャンブルには影響しないので、ここは特殊処理なし
         }
 
@@ -1058,7 +1058,7 @@ const robCommand = {
 
         // 強盗対象は所持金のみ
         const targetCoins = await getCoins(targetUser.id); // awaitを追加
-        const robberCoins = await getCoins(robberUser.id); // awaitを追加
+        const robberCoins = await await getCoins(robberUser.id); // awaitを追加
 
         if (targetCoins <= 0) {
             return interaction.editReply({ content: `${targetUser.username} さんは現在いんコインを持っていません。` });
@@ -2534,6 +2534,14 @@ client.on('interactionCreate', async interaction => {
                     const initialCurrentCoins = await getCoins(userId); 
                     const totalAvailableCoins = initialBankCoins + initialCurrentCoins; // 総資産
 
+                    // 総資産が0以下の場合、罰金を適用しない
+                    if (totalAvailableCoins <= 0) {
+                        console.log(`User ${userId} has 0 or negative total coins, skipping negative credit penalty.`);
+                        // 信用ポイントのリセットとフラグの更新は行わない
+                        // ただし、信用ポイントは負なので、次回以降の週次更新で減算され続ける
+                        return; // ここで処理を終了
+                    }
+
                     const deductionPercentage = Math.floor(Math.random() * (90 - 75 + 1)) + 75; // 75%から90%
                     let intendedTotalDeduction = Math.floor(totalAvailableCoins * (deductionPercentage / 100)); // 総資産から算出される本来の罰金
 
@@ -2570,7 +2578,11 @@ client.on('interactionCreate', async interaction => {
                             dmMessage = `信用ポイントが負になったため、銀行に残高がなかったため所持金から **${deductedFromCurrent.toLocaleString()}** いんコインが差し引かれました。`;
                         }
                     } else {
-                        dmMessage = `信用ポイントが負になりましたが、銀行と所持金に残高がなかったため、いんコインは差し引かれませんでした。`;
+                        // totalAvailableCoins > 0 && actualTotalDeducted == 0 となるのは、
+                        // intendedTotalDeductionが非常に小さく、Math.floorで0になった場合。
+                        // または、そもそもtotalAvailableCoinsが非常に小さく、intendedTotalDeductionが0になった場合。
+                        // この場合も「いんコインは差し引かれなかった」とメッセージングするのが適切
+                        dmMessage = `信用ポイントが負になりましたが、いんコインが少なかったため、差し引かれたいんコインはありませんでした。`;
                     }
 
                     // 信用ポイントを-10にリセットし、罰金を適用済みとしてマーク
