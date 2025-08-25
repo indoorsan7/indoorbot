@@ -71,7 +71,8 @@ const defaultCompanyData = {
     budget: 0,
     autoDeposit: false,
     members: [], // [{ id: userId, username: "username" }]
-    lastPayoutTime: 0 // 最終支払い時刻
+    lastPayoutTime: 0, // 最終支払い時刻
+    password: null, // 新しく追加: 会社パスワード
 };
 
 // 株データのデフォルト構造
@@ -413,6 +414,10 @@ async function getCompanyData(companyId) {
                     data[key] = defaultCompanyData[key];
                 }
             }
+            // パスワードフィールドがなければnullで初期化
+            if (data.password === undefined) {
+                data.password = null;
+            }
             companyDataCache.set(companyId, data);
             return data;
         } else {
@@ -481,6 +486,10 @@ async function getAllCompanies() {
                 if (data[key] === undefined) {
                     data[key] = defaultCompanyData[key];
                 }
+            }
+            // パスワードフィールドがなければnullで初期化
+            if (data.password === undefined) {
+                data.password = null;
             }
             companyDataCache.set(companyId, data);
             companies.push({ id: companyId, ...data });
@@ -677,6 +686,10 @@ async function syncAllDataFromFirestore() {
                 if (data[key] === undefined) {
                     data[key] = defaultCompanyData[key];
                 }
+            }
+            // パスワードフィールドがなければnullで初期化
+            if (data.password === undefined) {
+                data.password = null;
             }
             companyDataCache.set(companyId, data);
             loadedCompaniesCount++;
@@ -2073,7 +2086,23 @@ const companyCommand = {
                     option.setName('daily_salary')
                         .setDescription('メンバーへの日給')
                         .setRequired(true)
-                        .setMinValue(0)))
+                        .setMinValue(0))
+                .addStringOption(option => // パスワードオプションを追加
+                    option.setName('password')
+                        .setDescription('会社参加用のパスワード (任意)')
+                        .setRequired(false)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('edit') // 新しいeditコマンドを追加
+                .setDescription('会社の情報（名前、パスワード）を変更します。(社長のみ)')
+                .addStringOption(option =>
+                    option.setName('new_name')
+                        .setDescription('新しい会社名')
+                        .setRequired(false))
+                .addStringOption(option =>
+                    option.setName('new_password')
+                        .setDescription('新しい会社パスワード')
+                        .setRequired(false)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('deposit')
@@ -2108,7 +2137,11 @@ const companyCommand = {
                     option.setName('company_name')
                         .setDescription('参加したい会社名')
                         .setRequired(true)
-                        .setAutocomplete(true)))
+                        .setAutocomplete(true))
+                .addStringOption(option => // パスワードオプションを追加
+                    option.setName('password')
+                        .setDescription('会社参加用のパスワード (必要な場合)')
+                        .setRequired(false)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('info')
@@ -2139,11 +2172,12 @@ const companyCommand = {
                 .setDescription('会社関連の利用可能なコマンドとその説明です。')
                 .setColor('ADD8E6')
                 .addFields(
-                    { name: '/company add <会社名> <日給>', value: '新しい会社を作成します。あなたが社長になります。(社長のみ)', inline: false },
+                    { name: '/company add <会社名> <日給> [パスワード]', value: '新しい会社を作成します。あなたが社長になります。(社長のみ)', inline: false },
+                    { name: '/company edit [新しい会社名] [新しいパスワード]', value: '会社の情報（名前、パスワード）を変更します。(社長のみ)', inline: false },
                     { name: '/company deposit <金額>', value: 'あなたの所持金から会社予算に預け入れます。', inline: false },
                     { name: '/company withdraw <金額>', value: '会社の予算からあなたの所持金に引き出します。(社長のみ)', inline: false },
                     { name: '/company alldeposit <true|false>', value: 'workコマンドで得た収益を自動で会社予算に入れるか設定します。(社長のみ)', inline: false },
-                    { name: '/company join <会社名>', value: '指定した会社に参加します。毎日日給が支払われます。', inline: false },
+                    { name: '/company join <会社名> [パスワード]', value: '指定した会社に参加します。毎日日給が支払われます。', inline: false },
                     { name: '/company info [会社名]', value: '自分の所属する会社、または指定した会社の情報を表示します。', inline: false },
                     { name: '/company leave', value: '所属している会社を辞めます。(社長以外)', inline: false },
                     { name: '/company delete', value: 'あなたの会社を削除します。会社のいんコインは全て消滅します。(社長のみ)', inline: false },
@@ -2154,6 +2188,8 @@ const companyCommand = {
         } else if (subcommand === 'add') {
             const companyName = interaction.options.getString('name');
             const dailySalary = interaction.options.getInteger('daily_salary');
+            const password = interaction.options.getString('password'); // パスワードオプションを取得
+
             const allCompanies = await getAllCompanies();
             const existingCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (existingCompany) {
@@ -2171,7 +2207,8 @@ const companyCommand = {
                 ownerId: userId,
                 dailySalary: dailySalary,
                 members: [{ id: userId, username: interaction.user.username }],
-                lastPayoutTime: Date.now()
+                lastPayoutTime: Date.now(),
+                password: password, // パスワードを保存
             };
             await saveCompanyDataToFirestore(companyId, newCompanyData);
             await updateUserDataField(userId, 'companyId', companyId);
@@ -2191,6 +2228,7 @@ const companyCommand = {
                 .setColor('#00FF00')
                 .setDescription(`会社「**${companyName}**」を設立しました！あなたが社長です。
 日給: ${dailySalary.toLocaleString()} いんコイン
+${password ? 'パスワードが設定されました。' : 'パスワードは設定されていません。'}
 会社ID: \`${companyId}\``)
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2209,6 +2247,50 @@ const companyCommand = {
             } catch (dmError) {
                 console.error(`Failed to send company creation DM to owner ${userId}:`, dmError);
             }
+
+        } else if (subcommand === 'edit') { // 新しいeditコマンドの処理
+            const newName = interaction.options.getString('new_name');
+            const newPassword = interaction.options.getString('new_password');
+
+            const userData = await getUserData(userId);
+            if (!userData.companyId) {
+                return interaction.editReply({ content: 'あなたはどの会社にも所属していません。会社に参加するか作成してください。' });
+            }
+            let companyData = await getCompanyData(userData.companyId);
+            if (!companyData || companyData.ownerId !== userId) {
+                return interaction.editReply({ content: '会社の情報を変更できるのは社長のみです。' });
+            }
+
+            if (!newName && !newPassword) {
+                return interaction.editReply({ content: '新しい会社名または新しいパスワードのどちらか、あるいは両方を指定してください。' });
+            }
+
+            let updateFields = {};
+            let replyMessages = [];
+
+            if (newName) {
+                const allCompanies = await getAllCompanies();
+                const existingCompany = allCompanies.find(c => c.name.toLowerCase() === newName.toLowerCase() && c.id !== companyData.id);
+                if (existingCompany) {
+                    return interaction.editReply({ content: 'その会社名は既に存在します。別の名前を試してください。' });
+                }
+                updateFields.name = newName;
+                replyMessages.push(`会社名を「**${newName}**」に変更しました。`);
+            }
+            if (newPassword !== null) { // newPasswordが明示的にnullまたは空文字列で指定された場合も含む
+                updateFields.password = newPassword === '' ? null : newPassword; // 空文字列ならnullに設定
+                replyMessages.push(newPassword === '' ? '会社のパスワードを削除しました。' : `会社のパスワードを更新しました。`);
+            }
+
+            await saveCompanyDataToFirestore(companyData.id, { ...companyData, ...updateFields });
+
+            const embed = new EmbedBuilder()
+                .setTitle('会社情報更新完了！')
+                .setColor('#00FF00')
+                .setDescription(replyMessages.join('\n'))
+                .setTimestamp()
+                .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
+            await interaction.editReply({ embeds: [embed] });
 
         } else if (subcommand === 'deposit') {
             const amount = interaction.options.getInteger('amount');
@@ -2292,11 +2374,25 @@ const companyCommand = {
             await interaction.editReply({ embeds: [embed] });
         } else if (subcommand === 'join') {
             const companyName = interaction.options.getString('company_name');
+            const providedPassword = interaction.options.getString('password'); // 提供されたパスワードを取得
+
             const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
+
+            // パスワードチェック
+            if (targetCompany.password && targetCompany.password !== providedPassword) {
+                return interaction.editReply({ content: 'この会社はパスワードで保護されています。正しいパスワードを入力してください。' });
+            }
+            if (targetCompany.password && !providedPassword) {
+                return interaction.editReply({ content: 'この会社はパスワードで保護されています。パスワードを入力してください。' });
+            }
+            if (!targetCompany.password && providedPassword) {
+                 return interaction.editReply({ content: 'この会社はパスワードで保護されていません。パスワードオプションは不要です。' });
+            }
+
             const userData = await getUserData(userId);
             if (userData.companyId) {
                 const currentCompany = await getCompanyData(userData.companyId);
@@ -2348,6 +2444,7 @@ const companyCommand = {
                     { name: '現在の予算', value: `${targetCompanyData.budget.toLocaleString()} いんコイン`, inline: false },
                     { name: '自動入金', value: targetCompanyData.autoDeposit ? 'ON' : 'OFF', inline: true },
                     { name: 'メンバー数', value: `${targetCompanyData.members.length} 人`, inline: true },
+                    { name: 'パスワード設定', value: targetCompanyData.password ? 'あり' : 'なし', inline: true }, // パスワード情報の追加
                     { name: 'メンバーリスト', value: membersList, inline: false }
                 )
                 .setTimestamp()
@@ -2732,7 +2829,8 @@ const echoCommand = {
             return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。' });
         }
         const message = interaction.options.getString('message');
-        await interaction.editReply({ content: '正常に動作しました。\n(このメッセージはあなただけに表示されています)' });
+        // /echo コマンドの最初の応答は一時的
+        await interaction.editReply({ content: '正常に動作しました。\n(このメッセージはあなただけに表示されています)', ephemeral: true });
         await interaction.channel.send(message);
     },
 };
@@ -2822,19 +2920,21 @@ const authCommand = {
         const authData = authChallenges.get(userId);
         if (!authData) {
             return interaction.editReply({
-                content: '認証リクエストが見つかりません。まずサーバーで認証ボタンを押してください。'
+                content: '認証リクエストが見つかりません。まずサーバーで認証ボタンを押してください。',
+                ephemeral: true // auth command should be ephemeral
             });
         }
         if (Date.now() - authData.timestamp > 3 * 60 * 1000) {
             authChallenges.delete(userId);
             return interaction.editReply({
-                content: '有効な認証コードが見当たりません。もう一度認証ボタンからやり直してください。'
+                content: '有効な認証コードが見当たりません。もう一度認証ボタンからやり直してください。',
+                ephemeral: true // auth command should be ephemeral
             });
         }
         if (authData.code === code) {
             const guild = client.guilds.cache.get(authData.guildId);
             if (!guild) {
-                return interaction.editReply({ content: '認証したサーバーが見つかりません。' });
+                return interaction.editReply({ content: '認証したサーバーが見つかりません。', ephemeral: true });
             }
             const member = await guild.members.fetch(userId);
             const authRole = guild.roles.cache.get(authData.roleToAssign);
@@ -2842,16 +2942,19 @@ const authCommand = {
                 await member.roles.add(authRole);
                 authChallenges.delete(userId);
                 return interaction.editReply({
-                    content: `認証に成功しました！ ${authRole.name} ロールを付与しました。`
+                    content: `認証に成功しました！ ${authRole.name} ロールを付与しました。`,
+                    ephemeral: true // auth command should be ephemeral
                 });
             } else {
                 return interaction.editReply({
-                    content: '認証は成功しましたが、ロールを付与できませんでした。サーバー管理者に連絡してください。'
+                    content: '認証は成功しましたが、ロールを付与できませんでした。サーバー管理者に連絡してください。',
+                    ephemeral: true // auth command should be ephemeral
                 });
             }
         } else {
             return interaction.editReply({
-                content: '認証コードが正しくありません。もう一度お試しください。'
+                content: '認証コードが正しくありません。もう一度お試しください。',
+                ephemeral: true // auth command should be ephemeral
             });
         }
     },
@@ -3046,7 +3149,9 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
-        await interaction.deferReply({ ephemeral: true }).catch(error => {
+        // /echo 以外のコマンドはデフォルトで公開応答
+        const isEphemeralCommand = interaction.commandName === 'echo' || interaction.commandName === 'auth'; 
+        await interaction.deferReply({ ephemeral: isEphemeralCommand }).catch(error => {
             console.error("Failed to defer reply:", error);
             return;
         });
@@ -3061,8 +3166,9 @@ client.on('interactionCreate', async interaction => {
 
         if (!command) {
             console.error(`No command matching ${interaction.commandName} was found.`);
+            // 不明なコマンドは常に一時的に返信
             if (interaction.deferred || interaction.replied) {
-                return interaction.editReply({ content: '不明なコマンドです！' });
+                return interaction.editReply({ content: '不明なコマンドです！', ephemeral: true });
             } else {
                 return interaction.reply({ content: '不明なコマンドです！', ephemeral: true });
             }
@@ -3070,7 +3176,7 @@ client.on('interactionCreate', async interaction => {
 
         try {
             if (command.default_member_permissions && interaction.member && !interaction.member.permissions.has(command.default_member_permissions)) {
-                return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。' });
+                return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。', ephemeral: true });
             }
             
             const nonAdminMoneyCommands = ['gambling', 'money', 'work', 'rob', 'give-money', 'deposit', 'withdraw', 'jobs', 'job-change', 'load', 'company', 'stock'];
@@ -3079,7 +3185,7 @@ client.on('interactionCreate', async interaction => {
             if (nonAdminMoneyCommands.includes(interaction.commandName) && interaction.commandName !== 'register' && !isCompanyAddCommand) {
                 const userData = await getUserData(interaction.user.id);
                 if (!userData.isRegistered) {
-                    return interaction.editReply({ content: 'このコマンドを使用するには、まず `/register` コマンドでいんコインシステムに登録してください。' });
+                    return interaction.editReply({ content: 'このコマンドを使用するには、まず `/register` コマンドでいんコインシステムに登録してください。', ephemeral: true });
                 }
             }
 
@@ -3160,8 +3266,9 @@ client.on('interactionCreate', async interaction => {
 
         } catch (error) {
             console.error(`Error executing command ${interaction.commandName}:`, error);
+            // コマンド実行中のエラーも一時的に返信
             if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ content: 'コマンドの実行中にエラーが発生しました！' });
+                await interaction.editReply({ content: 'コマンドの実行中にエラーが発生しました！', ephemeral: true });
             } else {
                 await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました！', ephemeral: true });
             }
@@ -3225,7 +3332,7 @@ client.on('interactionCreate', async interaction => {
                 
                 const member = interaction.guild.members.cache.get(interaction.user.id);
                 if (member && member.roles.cache.has(roleToAssign)) {
-                    return interaction.editReply({ content: 'あなたは既に認証されています。' });
+                    return interaction.editReply({ content: 'あなたは既に認証されています。', ephemeral: true });
                 }
 
                 const num1 = Math.floor(Math.random() * (30 - 10 + 1)) + 10;
@@ -3256,12 +3363,14 @@ client.on('interactionCreate', async interaction => {
                     await interaction.user.send({ embeds: [dmEmbed] });
                     await interaction.editReply({
                         content: '認証コードをDMに送信しました。ご確認ください。',
+                        ephemeral: true
                     });
                 } catch (error) {
                     console.error('DM送信中にエラーが発生しました:', error);
                     authChallenges.delete(interaction.user.id);
                     await interaction.editReply({
                         content: 'DMの送信に失敗しました。DM設定をご確認ください。',
+                        ephemeral: true
                     });
                 }
             } else if (interaction.customId.startsWith('ticket_create_')) {
@@ -3271,7 +3380,7 @@ client.on('interactionCreate', async interaction => {
                 const panelConfig = ticketPanels.get(panelId);
 
                 if (!panelConfig) {
-                    return interaction.editReply({ content: 'このチケットパネルは無効です。再度作成してください。' });
+                    return interaction.editReply({ content: 'このチケットパネルは無効です。再度作成してください。', ephemeral: true });
                 }
 
                 const { categoryId, roles } = panelConfig;
@@ -3279,7 +3388,7 @@ client.on('interactionCreate', async interaction => {
                 const member = interaction.member;
 
                 if (!guild || !member) {
-                    return interaction.editReply({ content: 'この操作はサーバー内でのみ実行可能です。' });
+                    return interaction.editReply({ content: 'この操作はサーバー内でのみ実行可能です。', ephemeral: true });
                 }
 
                 const existingTicketChannel = guild.channels.cache.find(c =>
@@ -3290,6 +3399,7 @@ client.on('interactionCreate', async interaction => {
                 if (existingTicketChannel) {
                     return interaction.editReply({
                         content: `あなたはすでにチケットを持っています: ${existingTicketChannel}`,
+                        ephemeral: true
                     });
                 }
                 
@@ -3350,6 +3460,7 @@ client.on('interactionCreate', async interaction => {
 
                     await interaction.editReply({
                         content: `チケットが作成されました: ${newChannel}`,
+                        ephemeral: true
                     });
 
                 } catch (error) {
@@ -3357,9 +3468,9 @@ client.on('interactionCreate', async interaction => {
                     await interaction.editReply({ content: 'チケットの作成に失敗しました。', ephemeral: true });
                 }
             } else if (interaction.customId === 'ticket_close') {
-                await interaction.deferReply();
+                await interaction.deferReply({ ephemeral: true }); // チケットクローズも一時的
                 try {
-                    await interaction.editReply({ content: 'チケットを終了します。このチャンネルは数秒後に削除されます。' });
+                    await interaction.editReply({ content: 'チケットを終了します。このチャンネルは数秒後に削除されます。', ephemeral: true });
                     setTimeout(() => {
                         interaction.channel.delete('チケットが終了されました');
                     }, 3000);
