@@ -141,7 +141,7 @@ const jobChangeCosts = new Map([
 ]);
 
 const authChallenges = new Map(); // 認証チャレンジ用（一時データ）
-const ticketPanels = new Map();   // チケットパネル設定用（一時データ）
+// const ticketPanels = new Map();   // チケットパネル設定用（一時データ） - ticketPanelsConfigを使用しているため削除
 
 // === Firestore Helper Functions ===
 
@@ -510,7 +510,7 @@ async function getAllCompaniesInGuild(guildId) {
             if (data.password === undefined) {
                 data.password = null;
             }
-            getGuildCache(guildId).companyDataCache.set(companyId, data);
+            guildCache.companyDataCache.set(companyId, data);
             companies.push({ id: companyId, ...data });
         });
         return companies;
@@ -674,15 +674,18 @@ async function getChannelRewardData(guildId, channelId) {
 async function saveChannelRewardDataToFirestore(guildId, channelId, rewardDataToSave) {
     const docRef = getChannelRewardDocRef(guildId, channelId);
     if (!docRef) {
-        console.warn(`Cannot save channel reward data for guild ${guildId}, channel ${channelId}. Firestore reference not available or invalid channelId.`);
-        return false; // docRefがnullの場合は失敗を返す
+        // docRefがnullの場合、詳細な警告を出す
+        console.warn(`Firestore reference is NULL for guild ${guildId}, channel ${channelId}. Check if DB is ready or IDs are valid. Cannot save channel reward data.`);
+        return false;
     }
     try {
         await setDoc(docRef, rewardDataToSave, { merge: true });
         getGuildCache(guildId).channelChatRewards.set(channelId, rewardDataToSave); // キャッシュも更新
+        console.log(`Successfully saved channel reward data for guild ${guildId}, channel ${channelId}.`);
         return true; // 成功を返す
     } catch (error) {
-        console.error(`Error saving channel reward data for guild ${guildId}, channel ${channelId}:`, error);
+        // Firestoreへの書き込みに失敗した場合、より詳細なエラーをログに出す
+        console.error(`ERROR: Failed to save channel reward data for guild ${guildId}, channel ${channelId}. Details:`, error);
         return false; // エラーが発生した場合は失敗を返す
     }
 }
@@ -1775,16 +1778,16 @@ const channelMoneyCommand = {
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
     async execute(interaction) {
         const guildId = interaction.guild.id;
-        if (!db || firebaseAuthUid === 'anonymous') {
-            return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
-        }
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。' });
-        }
-
         const channel = interaction.options.getChannel('channel');
         const minAmount = interaction.options.getInteger('min');
         const maxAmount = interaction.options.getInteger('max');
+
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。' });
+        }
+        if (!db || firebaseAuthUid === 'anonymous') {
+            return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
+        }
 
         if (minAmount > maxAmount) {
             return interaction.editReply({ content: '最低金額は最大金額以下である必要があります。' });
@@ -1794,7 +1797,13 @@ const channelMoneyCommand = {
         const saveSuccess = await saveChannelRewardDataToFirestore(guildId, channel.id, { min: minAmount, max: maxAmount });
 
         if (!saveSuccess) {
-            return interaction.editReply({ content: 'チャンネル報酬の設定中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            // エラーの種類に応じてメッセージを細分化
+            const docRef = getChannelRewardDocRef(guildId, channel.id);
+            if (!docRef) {
+                return interaction.editReply({ content: 'チャンネル報酬の設定に失敗しました。ボットのデータベース接続が不安定な可能性があります。もう一度お試しください。', ephemeral: true });
+            } else {
+                return interaction.editReply({ content: 'チャンネル報酬の設定中にデータベースエラーが発生しました。Firestoreのセキュリティルールを確認してください。', ephemeral: true });
+            }
         }
 
         const embed = new EmbedBuilder()
