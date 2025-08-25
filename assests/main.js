@@ -601,6 +601,11 @@ async function getAllStocks() {
 
 
 // === Channel Reward Data Functions ===
+/**
+ * チャンネル報酬データをメモリキャッシュから取得、またはFirestoreからロードします。
+ * @param {string} channelId - チャンネルID
+ * @returns {Promise<Object>} - チャンネル報酬データオブジェクト
+ */
 async function getChannelRewardData(channelId) {
     // まずメモリキャッシュから取得
     if (channelChatRewards.has(channelId)) {
@@ -637,17 +642,25 @@ async function getChannelRewardData(channelId) {
     }
 }
 
+/**
+ * チャンネル報酬データをメモリキャッシュを更新し、Firestoreに保存します。
+ * @param {string} channelId - チャンネルID
+ * @param {Object} rewardDataToSave - 更新するデータオブジェクト
+ * @returns {Promise<boolean>} - 保存が成功した場合は true、失敗した場合は false
+ */
 async function saveChannelRewardDataToFirestore(channelId, rewardDataToSave) {
     const docRef = getChannelRewardDocRef(channelId);
     if (!docRef) {
         console.warn(`Cannot save channel reward data for ${channelId}. Firestore reference not available or invalid channelId.`);
-        return;
+        return false; // docRefがnullの場合は失敗を返す
     }
     try {
         await setDoc(docRef, rewardDataToSave, { merge: true });
         channelChatRewards.set(channelId, rewardDataToSave); // キャッシュも更新
+        return true; // 成功を返す
     } catch (error) {
         console.error(`Error saving channel reward data for ${channelId}:`, error);
+        return false; // エラーが発生した場合は失敗を返す
     }
 }
 
@@ -1740,8 +1753,12 @@ const channelMoneyCommand = {
             return interaction.editReply({ content: '最低金額は最大金額以下である必要があります。' });
         }
 
-        // Firestoreに保存するように変更
-        await saveChannelRewardDataToFirestore(channel.id, { min: minAmount, max: maxAmount });
+        // Firestoreに保存するように変更し、成否をチェック
+        const saveSuccess = await saveChannelRewardDataToFirestore(channel.id, { min: minAmount, max: maxAmount });
+
+        if (!saveSuccess) {
+            return interaction.editReply({ content: 'チャンネル報酬の設定中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+        }
 
         const embed = new EmbedBuilder()
             .setTitle('チャンネル報酬設定')
@@ -2210,7 +2227,10 @@ const companyCommand = {
                 lastPayoutTime: Date.now(),
                 password: password, // パスワードを保存
             };
-            await saveCompanyDataToFirestore(companyId, newCompanyData);
+            const saveSuccess = await saveCompanyDataToFirestore(companyId, newCompanyData);
+            if (!saveSuccess) {
+                return interaction.editReply({ content: '会社の設立中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
             await updateUserDataField(userId, 'companyId', companyId);
             await setUserJob(userId, "社長");
             // 新しく作成された会社の株データも初期化
@@ -2282,7 +2302,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 replyMessages.push(newPassword === '' ? '会社のパスワードを削除しました。' : `会社のパスワードを更新しました。`);
             }
 
-            await saveCompanyDataToFirestore(companyData.id, { ...companyData, ...updateFields });
+            const saveSuccess = await saveCompanyDataToFirestore(companyData.id, { ...companyData, ...updateFields });
+            if (!saveSuccess) {
+                return interaction.editReply({ content: '会社情報の更新中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
 
             const embed = new EmbedBuilder()
                 .setTitle('会社情報更新完了！')
@@ -2309,7 +2332,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
             }
             await addCoins(userId, -amount);
-            await updateCompanyDataField(userData.companyId, 'budget', companyData.budget + amount);
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'budget', companyData.budget + amount);
+            if (!updateSuccess) {
+                return interaction.editReply({ content: '会社の予算への預け入れ中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
             const embed = new EmbedBuilder()
                 .setTitle('会社予算に預け入れ')
                 .setColor('#00FF00')
@@ -2337,7 +2363,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             if (companyData.budget < amount) {
                 return interaction.editReply({ content: `会社の予算が足りません！現在 ${companyData.budget.toLocaleString()} いんコインが会社の予算にあります。` });
             }
-            await updateCompanyDataField(userData.companyId, 'budget', companyData.budget - amount);
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'budget', companyData.budget - amount);
+            if (!updateSuccess) {
+                return interaction.editReply({ content: '会社の予算からの引き出し中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
             await addCoins(userId, amount);
             const embed = new EmbedBuilder()
                 .setTitle('会社予算から引き出し')
@@ -2363,7 +2392,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                  await setUserJob(userId, "無職");
                  return interaction.editReply({ content: '所属している会社のデータが見つかりませんでした。会社から脱退扱いになりました。再度会社に参加するか、新しい会社を作成してください。' });
             }
-            await updateCompanyDataField(userData.companyId, 'autoDeposit', toggle);
+            const updateSuccess = await updateCompanyDataField(userData.companyId, 'autoDeposit', toggle);
+            if (!updateSuccess) {
+                return interaction.editReply({ content: '自動入金設定の変更中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
             const status = toggle ? 'ON' : 'OFF';
             const embed = new EmbedBuilder()
                 .setTitle('自動入金設定')
@@ -2402,7 +2434,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
                 return interaction.editReply({ content: `あなたは既に会社「${companyName}」のメンバーです。` });
             }
             const updatedMembers = [...targetCompany.members, { id: userId, username: interaction.user.username }];
-            await saveCompanyDataToFirestore(targetCompany.id, { ...targetCompany, members: updatedMembers });
+            const saveSuccess = await saveCompanyDataToFirestore(targetCompany.id, { ...targetCompany, members: updatedMembers });
+            if (!saveSuccess) {
+                return interaction.editReply({ content: '会社への参加中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
             await updateUserDataField(userId, 'companyId', targetCompany.id);
             const embed = new EmbedBuilder()
                 .setTitle('会社に参加成功！')
@@ -2495,7 +2530,10 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             }
 
             const updatedMembers = companyData.members.filter(member => member.id !== userId);
-            await saveCompanyDataToFirestore(companyData.id, { ...companyData, members: updatedMembers });
+            const saveSuccess = await saveCompanyDataToFirestore(companyData.id, { ...companyData, members: updatedMembers });
+            if (!saveSuccess) {
+                return interaction.editReply({ content: '会社からの脱退中にデータベースエラーが発生しました。もう一度お試しください。', ephemeral: true });
+            }
 
             await updateUserDataField(userId, 'companyId', null);
             await setUserJob(userId, "無職");
@@ -3426,6 +3464,9 @@ client.on('interactionCreate', async interaction => {
                             id: roleId,
                             allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
                         });
+                    }
+                    else {
+                        console.warn(`Invalid roleId found in panelConfig.roles for panelId: ${panelId}`);
                     }
                 });
 
