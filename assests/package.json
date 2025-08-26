@@ -17,8 +17,10 @@
   "author": "indoor",
   "license": "ISC",
   "dependencies": {
+    "chart.js": "^4.4.3",
     "discord.js": "^14.15.3",
-    "firebase": "^10.12.3",
-    "dotenv": "^16.4.5"
+    "firebase": "^10.12.4",
+    "chartjs-node-canvas": "^4.1.6",
+    "canvas": "^2.11.2"
   }
 }
