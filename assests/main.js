@@ -1,9 +1,12 @@
-import { Client, Collection, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, REST, Routes, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ActivityType } from 'discord.js';
+import { Client, Collection, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, REST, Routes, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ActivityType, AttachmentBuilder } from 'discord.js'; // AttachmentBuilderを追加
 import http from 'http';
 // FirebaseのインポートをESモジュール形式に修正
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, signInWithCustomToken } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } from "firebase/firestore";
+
+// Chart.jsの画像生成に必要なライブラリをインポート
+import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -502,7 +505,6 @@ async function getAllCompanies() {
                     data[key] = defaultCompanyData[key];
                 }
             }
-            // パスワードフィールドがなければnullで初期化
             if (data.password === undefined) {
                 data.password = null;
             }
@@ -2594,7 +2596,24 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
 };
 client.commands.set(companyCommand.data.name, companyCommand);
 
-// === Stock Command (テキストベースグラフに修正) ===
+// Chart.jsの画像生成設定
+const width = 800; // グラフ画像の幅
+const height = 400; // グラフ画像の高さ
+// 'Noto Sans JP'フォントを登録。環境にインストールされているか、適切に設定されている必要があります。
+// 'chartjs-node-canvas'でカスタムフォントを使用する場合、通常は'registerFont'でパスを指定しますが、
+// ここではデフォルトのフォント設定に任せます。もしフォントが正しく表示されない場合は、
+// サーバー環境でのフォントインストールや'chartjs-node-canvas'のフォント設定を確認してください。
+const chartJSNodeCanvas = new ChartJSNodeCanvas({ 
+    width, 
+    height, 
+    chartCallback: (ChartJS) => {
+        // Chart.jsのデフォルトフォントを日本語対応にする設定例
+        ChartJS.defaults.font.family = "'Noto Sans JP', sans-serif";
+    }
+});
+
+
+// === Stock Command (Chart.js画像生成に修正) ===
 const stockCommand = {
     data: new SlashCommandBuilder()
         .setName('stock')
@@ -2670,7 +2689,7 @@ const stockCommand = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('info')
-                .setDescription('会社の株情報を表示します。')
+                .setDescription('会社の株情報をグラフで表示します。') // 説明を更新
                 .addStringOption(option =>
                     option.setName('company')
                         .setDescription('情報を表示したい会社名')
@@ -2695,7 +2714,7 @@ const stockCommand = {
                     { name: '/stock remove <会社名> <株数> <ユーザー>', value: '管理者のみ、指定したユーザーから会社の株を削除します。', inline: false },
                     { name: '/stock buy <会社名> <株数>', value: '会社の株を購入します。', inline: false },
                     { name: '/stock sell <会社名> <株数>', value: '会社の株を売却します。', inline: false },
-                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移を簡易グラフで表示します。', inline: false }, // 説明を更新
+                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移をグラフで表示します。', inline: false }, // 説明を更新
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2844,50 +2863,144 @@ const stockCommand = {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
 
-            const priceHistory = stockData.priceHistory.sort((a, b) => a.timestamp - b.timestamp);
-            let chart = '';
-            if (priceHistory.length > 1) {
-                const minPrice = Math.min(...priceHistory.map(entry => entry.price));
-                const maxPrice = Math.max(...priceHistory.map(entry => entry.price));
-                const range = maxPrice - minPrice;
+            const now = Date.now();
+            const priceHistory = stockData.priceHistory
+                .filter(entry => now - entry.timestamp <= 60 * 60 * 1000) // 過去1時間以内
+                .sort((a, b) => a.timestamp - b.timestamp); // 時系列順にソート
 
-                const chartHeight = 5; // テキストグラフの高さ
-                let grid = Array(chartHeight).fill(0).map(() => Array(priceHistory.length).fill('─')); // 初期化を横線に
-
-                priceHistory.forEach((entry, index) => {
-                    const priceNormalized = range === 0 ? 0 : (entry.price - minPrice) / range;
-                    const chartPosition = Math.floor(priceNormalized * (chartHeight - 1));
-                    grid[chartHeight - 1 - chartPosition][index] = '●'; // ポイントをプロット
-                });
-
-                // グリッドを文字列に変換
-                chart = '```ansi\n'; // ANSIエスケープコードを使って色付け
-                for(let i = 0; i < chartHeight; i++) {
-                    for (let j = 0; j < priceHistory.length; j++) {
-                         if (grid[i][j] === '●') {
-                            chart += '\x1b[34m●\x1b[0m'; // 青色
-                        } else {
-                            chart += '─';
-                        }
-                    }
-                    chart += '\n';
-                }
-                chart += '```\n';
-                chart += `現在の価格: **${stockData.currentPrice.toLocaleString()}** いんコイン\n`;
-                chart += `最低価格: **${minPrice.toLocaleString()}** いんコイン / 最高価格: **${maxPrice.toLocaleString()}** いんコイン`;
-            } else if (priceHistory.length === 1) {
-                chart = `過去1時間のデータが不足しています。現在の価格: **${stockData.currentPrice.toLocaleString()}** いんコイン`;
-            } else {
-                chart = '現在、株価履歴データがありません。';
+            if (priceHistory.length < 2) { // グラフを描画するには最低2点必要
+                const embed = new EmbedBuilder()
+                    .setTitle(`📈 会社「${targetCompany.name}」の株価情報`)
+                    .setColor('#FFD700')
+                    .setDescription(`現在の価格: **${stockData.currentPrice.toLocaleString()}** いんコイン\n\n株価履歴データが不足しているため、グラフは表示できません。`)
+                    .setTimestamp()
+                    .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
+                return interaction.editReply({ embeds: [embed] });
             }
 
-            const embed = new EmbedBuilder()
-                .setTitle(`📈 会社「${targetCompany.name}」の株価情報`)
-                .setColor('#FFD700')
-                .setDescription(chart) // グラフを直接Embedのdescriptionに設定
-                .setTimestamp()
-                .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
-            await interaction.editReply({ embeds: [embed] });
+            // Chart.js用のデータ整形
+            const labels = priceHistory.map(entry => {
+                const minutesAgo = Math.round((now - entry.timestamp) / (60 * 1000));
+                if (minutesAgo === 0) return '現在';
+                return `-${minutesAgo}分`;
+            });
+            const prices = priceHistory.map(entry => entry.price);
+
+            // Chart.jsの設定
+            const configuration = {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '株価 (いんコイン)',
+                        data: prices,
+                        borderColor: 'rgb(79, 70, 229)', // Tailwind indigo-600
+                        backgroundColor: 'rgba(79, 70, 229, 0.2)', // Tailwind indigo-600 with transparency
+                        tension: 0.3, // 線の滑らかさ
+                        fill: true,
+                        pointBackgroundColor: 'rgb(79, 70, 229)',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: 'rgb(79, 70, 229)',
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                    }]
+                },
+                options: {
+                    plugins: {
+                        legend: {
+                            display: false, // 凡例は非表示
+                        },
+                        title: {
+                            display: true,
+                            text: `会社「${targetCompany.name}」の株価推移`,
+                            font: {
+                                size: 24,
+                                family: 'Noto Sans JP', // 日本語フォント指定（対応していれば）
+                            },
+                            color: '#333'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return `株価: ${context.parsed.y.toLocaleString()} いんコイン`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '時間',
+                                font: {
+                                    family: 'Noto Sans JP',
+                                },
+                                color: '#4B5563'
+                            },
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                color: '#4B5563',
+                                font: {
+                                    family: 'Noto Sans JP',
+                                }
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '株価 (いんコイン)',
+                                font: {
+                                    family: 'Noto Sans JP',
+                                },
+                                color: '#4B5563'
+                            },
+                            min: Math.min(...prices) * 0.95,
+                            max: Math.max(...prices) * 1.05,
+                            grid: {
+                                color: 'rgba(203, 213, 225, 0.5)'
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toLocaleString();
+                                },
+                                color: '#4B5563',
+                                font: {
+                                    family: 'Noto Sans JP',
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            try {
+                // グラフ画像を生成
+                const imageBuffer = await chartJSNodeCanvas.renderToBuffer(configuration);
+
+                // Discordにファイルを添付
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'stock_chart.png' });
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`📈 会社「${targetCompany.name}」の株価推移`)
+                    .setDescription(`現在の株価: **${stockData.currentPrice.toLocaleString()}** いんコイン\n\n過去1時間の株価推移です。`)
+                    .setImage('attachment://stock_chart.png') // 添付した画像を表示
+                    .setColor('#FFD700')
+                    .setTimestamp()
+                    .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
+
+                await interaction.editReply({ embeds: [embed], files: [attachment] });
+
+            } catch (chartError) {
+                console.error(`Error generating Chart.js image for company ${targetCompany.name}:`, chartError);
+                await interaction.editReply({ content: 'グラフ画像の生成中にエラーが発生しました。', ephemeral: true });
+            }
         }
     },
 };
@@ -3130,7 +3243,7 @@ const ticketPanelCommand = {
             .setLabel('チケットを作成')
             .setStyle(ButtonStyle.Success);
         const actionRow = new ActionRowBuilder().addComponents(ticketButton);
-        const rolesMention = rolesToAssign.map(id => `<@&${id}>`).join(', ');
+        const rolesMention = rolesToAssign.map(id => `<@&${id}>`).join(', '); // ここを修正
         const ticketEmbed = new EmbedBuilder()
             .setColor('#32CD32')
             .setTitle('チケットが開かれました')
