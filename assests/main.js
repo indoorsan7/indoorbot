@@ -2678,7 +2678,6 @@ const stockCommand = {
                         .setAutocomplete(true))),
     default_member_permissions: null,
     async execute(interaction) {
-        // guildIdはユーザーデータの取得・保存には不要
         const userId = interaction.user.id;
         if (!db || firebaseAuthUid === 'anonymous') {
             return interaction.editReply({ content: 'ボットのデータベース接続がまだ準備できていません。数秒待ってからもう一度お試しください。' });
@@ -2696,7 +2695,7 @@ const stockCommand = {
                     { name: '/stock remove <会社名> <株数> <ユーザー>', value: '管理者のみ、指定したユーザーから会社の株を削除します。', inline: false },
                     { name: '/stock buy <会社名> <株数>', value: '会社の株を購入します。', inline: false },
                     { name: '/stock sell <会社名> <株数>', value: '会社の株を売却します。', inline: false },
-                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移を表示します。', inline: false },
+                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移をグラフで表示します。', inline: false }, // 説明を更新
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2709,19 +2708,19 @@ const stockCommand = {
             const amount = interaction.options.getInteger('amount');
             const targetUser = interaction.options.getUser('user');
 
-            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
+            const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            await addUserStocks(targetUser.id, targetCompany.id, amount); // guildIdを削除
+            await addUserStocks(targetUser.id, targetCompany.id, amount);
             const embed = new EmbedBuilder()
                 .setTitle('株付与完了')
                 .setColor('#00FF00')
                 .setDescription(`${targetUser.username} に会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株付与しました。`)
                 .addFields(
-                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
+                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2734,24 +2733,24 @@ const stockCommand = {
             const amount = interaction.options.getInteger('amount');
             const targetUser = interaction.options.getUser('user');
 
-            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
+            const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const userCurrentStocks = await getUserStocks(targetUser.id, targetCompany.id); // guildIdを削除
+            const userCurrentStocks = await getUserStocks(targetUser.id, targetCompany.id);
             if (userCurrentStocks < amount) {
                 return interaction.editReply({ content: `${targetUser.username} は会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株保有していません。（現在: ${userCurrentStocks.toLocaleString()} 株）` });
             }
 
-            await addUserStocks(targetUser.id, targetCompany.id, -amount); // guildIdを削除
+            await addUserStocks(targetUser.id, targetCompany.id, -amount);
             const embed = new EmbedBuilder()
                 .setTitle('株削除完了')
                 .setColor('#FF0000')
                 .setDescription(`${targetUser.username} から会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株削除しました。`)
                 .addFields(
-                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
+                    { name: `${targetUser.username} の株保有数`, value: `会社「${targetCompany.name}」: ${(await getUserStocks(targetUser.id, targetCompany.id)).toLocaleString()} 株`, inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2760,26 +2759,26 @@ const stockCommand = {
             const companyName = interaction.options.getString('company');
             const amount = interaction.options.getInteger('amount');
 
-            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
+            const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(targetCompany.id); // guildIdを削除
+            const stockData = await getStockData(targetCompany.id);
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
             const currentPrice = stockData.currentPrice;
             const totalCost = amount * currentPrice;
-            const userCoins = await getCoins(userId); // guildIdを削除
+            const userCoins = await getCoins(userId);
 
             if (userCoins < totalCost) {
                 return interaction.editReply({ content: `いんコインが足りません！**${amount.toLocaleString()}** 株購入するには **${totalCost.toLocaleString()}** いんコイン必要ですが、あなたは **${userCoins.toLocaleString()}** いんコインしか持っていません。` });
             }
 
-            await addCoins(userId, -totalCost); // guildIdを削除
-            await addUserStocks(userId, targetCompany.id, amount); // guildIdを削除
+            await addCoins(userId, -totalCost);
+            await addUserStocks(userId, targetCompany.id, amount);
 
             const embed = new EmbedBuilder()
                 .setTitle('株購入完了')
@@ -2787,8 +2786,8 @@ const stockCommand = {
                 .setDescription(`会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株購入しました。
 費用: **${totalCost.toLocaleString()}** いんコイン（@${currentPrice.toLocaleString()} いんコイン/株）`)
                 .addFields(
-                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
-                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
+                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false },
+                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2798,26 +2797,26 @@ const stockCommand = {
             const companyName = interaction.options.getString('company');
             const amount = interaction.options.getInteger('amount');
 
-            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
+            const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(targetCompany.id); // guildIdを削除
+            const stockData = await getStockData(targetCompany.id);
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
             const currentPrice = stockData.currentPrice;
-            const userCurrentStocks = await getUserStocks(userId, targetCompany.id); // guildIdを削除
+            const userCurrentStocks = await getUserStocks(userId, targetCompany.id);
 
             if (userCurrentStocks < amount) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株保有していません。（現在: ${userCurrentStocks.toLocaleString()} 株）` });
             }
 
             const totalEarnings = amount * currentPrice;
-            await addCoins(userId, totalEarnings); // guildIdを削除
-            await addUserStocks(userId, targetCompany.id, -amount); // guildIdを削除
+            await addCoins(userId, totalEarnings);
+            await addUserStocks(userId, targetCompany.id, -amount);
 
             const embed = new EmbedBuilder()
                 .setTitle('株売却完了')
@@ -2825,8 +2824,8 @@ const stockCommand = {
                 .setDescription(`会社「${targetCompany.name}」の株を **${amount.toLocaleString()}** 株売却しました。
 収益: **${totalEarnings.toLocaleString()}** いんコイン（@${currentPrice.toLocaleString()} いんコイン/株）`)
                 .addFields(
-                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false }, // guildIdを削除
-                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false } // guildIdを削除
+                    { name: 'あなたの所持金', value: `${(await getCoins(userId)).toLocaleString()} いんコイン`, inline: false },
+                    { name: `あなたの ${targetCompany.name} 株保有数`, value: `${(await getUserStocks(userId, targetCompany.id)).toLocaleString()} 株`, inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2834,51 +2833,273 @@ const stockCommand = {
         } else if (subcommand === 'info') {
             const companyName = interaction.options.getString('company');
 
-            const allCompanies = await getAllCompanies(); // グローバルな全ての会社を取得
+            const allCompanies = await getAllCompanies();
             const targetCompany = allCompanies.find(c => c.name.toLowerCase() === companyName.toLowerCase());
             if (!targetCompany) {
                 return interaction.editReply({ content: `会社「${companyName}」は見つかりませんでした。` });
             }
 
-            const stockData = await getStockData(targetCompany.id); // guildIdを削除
+            const stockData = await getStockData(targetCompany.id);
             if (!stockData || !stockData.currentPrice) {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
 
-            const priceHistory = stockData.priceHistory.sort((a, b) => a.timestamp - b.timestamp);
-            let chart = '';
-            if (priceHistory.length > 1) {
-                const minPrice = Math.min(...priceHistory.map(entry => entry.price));
-                const maxPrice = Math.max(...priceHistory.map(entry => entry.price));
-                const range = maxPrice - minPrice;
+            // グラフデータをHTMLに埋め込むためのJSON文字列を生成
+            const graphData = {
+                companyName: targetCompany.name,
+                currentPrice: stockData.currentPrice,
+                priceHistory: stockData.priceHistory.sort((a, b) => a.timestamp - b.timestamp)
+            };
 
-                // グラフの高さを決定 (例: 5行)
-                const chartHeight = 5;
+            // HTMLコンテンツを動的に生成
+            const htmlContent = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${targetCompany.name} 株価推移グラフ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            width: 100%;
+            max-width: 800px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+        canvas {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            display: block;
+            margin: 20px auto 0;
+            width: 100%;
+            height: 350px;
+        }
+        .title {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 16px;
+        }
+        .current-price {
+            font-size: 1.25rem;
+            color: #2d3748;
+            margin-bottom: 12px;
+        }
+        .info-text {
+            font-size: 0.875rem;
+            color: #718096;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="title" id="company-name">会社名: データの読み込み中...</h1>
+        <p class="current-price" id="current-price">現在の株価: ---</p>
+        <canvas id="stockChart"></canvas>
+        <p class="info-text">過去1時間の株価推移 (10分ごと)</p>
+    </div>
 
-                // 各時点の価格をグラフのY軸にマッピング
-                priceHistory.forEach((entry, index) => {
-                    const priceNormalized = range === 0 ? 0 : (entry.price - minPrice) / range;
-                    const chartPosition = Math.floor(priceNormalized * (chartHeight - 1));
-                    let line = ' '.repeat(chartHeight); // 5文字の空白
-                    line = line.substring(0, chartHeight - 1 - chartPosition) + '█' + line.substring(chartHeight - chartPosition);
-                    chart += `${line} ${entry.price.toLocaleString()} (${new Date(entry.timestamp).getMinutes()}分)\n`;
-                });
-                chart = `\`\`\`\n${chart}\n\`\`\``;
-            } else if (priceHistory.length === 1) {
-                chart = `過去1時間のデータが不足しています。現在の価格: ${stockData.currentPrice.toLocaleString()} いんコイン`;
-            } else {
-                chart = '現在、株価履歴データがありません。';
+    <script>
+        const canvas = document.getElementById('stockChart');
+        const ctx = canvas.getContext('2d');
+        const companyNameElement = document.getElementById('company-name');
+        const currentPriceElement = document.getElementById('current-price');
+
+        let animationFrameId = null;
+
+        function drawChart(priceHistory, currentPrice, companyName) {
+            const dpr = window.devicePixelRatio || 1;
+            const clientWidth = canvas.clientWidth;
+            const clientHeight = canvas.clientHeight;
+            
+            canvas.width = clientWidth * dpr;
+            canvas.height = clientHeight * dpr;
+            ctx.scale(dpr, dpr);
+
+            ctx.clearRect(0, 0, clientWidth, clientHeight);
+
+            if (!priceHistory || priceHistory.length < 2) {
+                ctx.font = '16px Inter';
+                ctx.fillStyle = '#4a5568';
+                ctx.textAlign = 'center';
+                ctx.fillText('過去1時間のデータが不足しています。', clientWidth / 2, clientHeight / 2);
+                ctx.fillText(\`現在の価格: \${currentPrice.toLocaleString()} いんコイン\`, clientWidth / 2, clientHeight / 2 + 25);
+                return;
             }
 
+            const padding = 30;
+            const chartWidth = clientWidth - padding * 2;
+            const chartHeight = clientHeight - padding * 2;
+
+            const allPrices = priceHistory.map(entry => entry.price);
+            const minPrice = Math.min(...allPrices);
+            const maxPrice = Math.max(...allPrices);
+            const priceRange = maxPrice - minPrice;
+
+            const numYLabels = 5;
+            for (let i = 0; i <= numYLabels; i++) {
+                const y = padding + chartHeight * (i / numYLabels);
+                const priceLabel = minPrice + priceRange * (1 - (i / numYLabels));
+                ctx.fillStyle = '#718096';
+                ctx.font = '12px Inter';
+                ctx.textAlign = 'right';
+                ctx.fillText(Math.round(priceLabel).toLocaleString(), padding - 5, y + 4);
+
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.beginPath();
+                ctx.moveTo(padding, y);
+                ctx.lineTo(clientWidth - padding, y);
+                ctx.stroke();
+            }
+
+            priceHistory.forEach((entry, index) => {
+                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
+                const date = new Date(entry.timestamp);
+                const timeLabel = \`\${date.getHours().toString().padStart(2, '0')}:\${date.getMinutes().toString().padStart(2, '0')}\`;
+                ctx.fillStyle = '#718096';
+                ctx.font = '12px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(timeLabel, x, clientHeight - padding + 20);
+
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.beginPath();
+                ctx.moveTo(x, padding);
+                ctx.lineTo(x, clientHeight - padding);
+                ctx.stroke();
+            });
+
+            ctx.beginPath();
+            ctx.strokeStyle = '#4299e1';
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+
+            priceHistory.forEach((entry, index) => {
+                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
+                const y = padding + chartHeight - ((entry.price - minPrice) / priceRange) * chartHeight;
+
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+
+            priceHistory.forEach((entry, index) => {
+                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
+                const y = padding + chartHeight - ((entry.price - minPrice) / priceRange) * chartHeight;
+                ctx.fillStyle = '#4299e1';
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function resizeCanvasAndDraw() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            animationFrameId = requestAnimationFrame(() => {
+                canvas.style.width = '100%';
+                canvas.style.height = '350px';
+
+                if (window.currentStockData) {
+                    companyNameElement.textContent = \`会社名: \${window.currentStockData.companyName}\`;
+                    currentPriceElement.textContent = \`現在の株価: \${window.currentStockData.currentPrice.toLocaleString()} いんコイン\`;
+                    drawChart(window.currentStockData.priceHistory, window.currentStockData.currentPrice, window.currentStockData.companyName);
+                } else {
+                    companyNameElement.textContent = \`会社名: データがありません\`;
+                    currentPriceElement.textContent = \`現在の株価: ---\`;
+                    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+                    ctx.font = '16px Inter';
+                    ctx.fillStyle = '#4a5568';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('データをロードしてください。', canvas.clientWidth / 2, canvas.clientHeight / 2);
+                }
+            });
+        }
+        
+        window.addEventListener('load', () => {
+            window.addEventListener('resize', resizeCanvasAndDraw);
+            resizeCanvasAndDraw();
+        });
+
+        window.updateStockChart = function(data) {
+            window.currentStockData = data;
+            resizeCanvasAndDraw();
+        };
+
+        // 初期データが存在する場合、ロード時に描画
+        if (typeof window.initialStockData !== 'undefined') {
+            window.updateStockChart(window.initialStockData);
+        }
+    </script>
+    <script>
+        // このスクリプトブロックはボットによって動的に挿入されるデータ用です。
+        // ここにJSONデータが埋め込まれます。
+        window.initialStockData = ${JSON.stringify(graphData)};
+        // ページロード後に初期データを描画するために、updateStockChartを呼び出します。
+        window.addEventListener('load', () => {
+            if (window.initialStockData) {
+                window.updateStockChart(window.initialStockData);
+            }
+        });
+    </script>
+</body>
+</html>
+            `;
+
+            // Canvas Immersive Document API を使用して新しいグラフを作成
+            const createImmersiveResponse = await fetch('/api/v1/immersives', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    type: 'code',
+                    title: `${targetCompany.name} 株価推移グラフ`,
+                    content: htmlContent,
+                    share_mode: 'view' // 共有可能モードで作成
+                })
+            });
+
+            if (!createImmersiveResponse.ok) {
+                console.error('Failed to create immersive document:', createImmersiveResponse.status, await createImmersiveResponse.text());
+                return interaction.editReply({ content: '株価グラフの作成に失敗しました。', ephemeral: true });
+            }
+
+            const immersiveResult = await createImmersiveResponse.json();
+            const graphUrl = immersiveResult.share_url; // 作成されたimmersivesのURLを取得
+
             const embed = new EmbedBuilder()
-                .setTitle(`会社「${targetCompany.name}」の株価情報`)
+                .setTitle(`📈 ${targetCompany.name} の株価情報`)
                 .setColor('#FFD700')
+                .setDescription(`現在の株価: **${stockData.currentPrice.toLocaleString()} いんコイン**`)
                 .addFields(
-                    { name: '現在の株価', value: `${stockData.currentPrice.toLocaleString()} いんコイン`, inline: false },
-                    { name: '過去1時間 (10分ごと)', value: chart, inline: false }
+                    { name: '過去1時間の推移グラフ', value: `[こちらをクリックしてグラフを見る](${graphUrl})`, inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
+
             await interaction.editReply({ embeds: [embed] });
         }
     },
@@ -3064,6 +3285,7 @@ const helpCommand = {
                 { name: '/money help', value: 'いんコイン関連のコマンドヘルプを表示します。', inline: false },
                 { name: '/company help', value: '会社関連のコマンドヘルプを表示します。', inline: false },
                 { name: '/stock help', value: '株関連のコマンドヘルプを表示します。', inline: false },
+                { name: '/clear-guild-commands <guild_id>', value: '指定ギルドの全てのローカルコマンドを削除します。(管理者のみ)', inline: false }, // 新しいコマンドを追加
                 { name: '/help', value: 'このコマンド一覧を表示します。', inline: false }
             );
         await interaction.editReply({ embeds: [helpEmbed] });
@@ -3135,6 +3357,45 @@ const ticketPanelCommand = {
 };
 client.commands.set(ticketPanelCommand.data.name, ticketPanelCommand);
 
+// 新しく追加するコマンド
+const clearGuildCommands = {
+    data: new SlashCommandBuilder()
+        .setName('clear-guild-commands')
+        .setDescription('指定ギルドの全てのローカルコマンドを削除します。(管理者のみ)')
+        .addStringOption(option =>
+            option.setName('guild_id')
+                .setDescription('コマンドを削除したいギルドのID')
+                .setRequired(true)),
+    default_member_permissions: PermissionsBitField.Flags.Administrator.toString(),
+    async execute(interaction) {
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.editReply({ content: 'このコマンドを実行するには管理者権限が必要です。' });
+        }
+        const targetGuildId = interaction.options.getString('guild_id');
+        const rest = new REST().setToken(DISCORD_TOKEN);
+
+        try {
+            await interaction.deferReply({ ephemeral: true });
+
+            console.log(`Fetching existing guild commands for guild ${targetGuildId}...`);
+            const existingGuildCommands = await rest.get(Routes.applicationGuildCommands(CLIENT_ID, targetGuildId));
+            
+            console.log(`Deleting ${existingGuildCommands.length} existing guild commands for guild ${targetGuildId}...`);
+            for (const command of existingGuildCommands) {
+                await rest.delete(Routes.applicationGuildCommand(CLIENT_ID, targetGuildId, command.id));
+            }
+            console.log(`All existing guild commands for guild ${targetGuildId} deleted.`);
+
+            await interaction.editReply({ content: `ギルドID \`${targetGuildId}\` の全てのローカルコマンドを削除しました。Discordクライアントを再起動すると反映されます。` });
+
+        } catch (error) {
+            console.error(`Failed to clear guild commands for guild ${targetGuildId}:`, error);
+            await interaction.editReply({ content: `ギルドID \`${targetGuildId}\` のローカルコマンドの削除中にエラーが発生しました。エラー: ${error.message}` });
+        }
+    },
+};
+client.commands.set(clearGuildCommands.data.name, clearGuildCommands);
+
 
 async function registerCommands() {
     // 全てのコマンドをグローバルコマンドとして登録します
@@ -3162,12 +3423,23 @@ async function registerCommands() {
         authCommand.data.toJSON(),
         helpCommand.data.toJSON(),
         ticketPanelCommand.data.toJSON(),
+        clearGuildCommands.data.toJSON(), // 新しいコマンドを追加
     ];
 
     const rest = new REST().setToken(DISCORD_TOKEN);
 
     try {
-        console.log(`Registering ${globalCommandsData.length} global commands.`);
+        console.log('Fetching existing global commands...');
+        const existingGlobalCommands = await rest.get(Routes.applicationCommands(CLIENT_ID));
+        
+        console.log(`Deleting ${existingGlobalCommands.length} existing global commands...`);
+        for (const command of existingGlobalCommands) {
+            await rest.delete(Routes.applicationCommand(CLIENT_ID, command.id));
+        }
+        console.log('All existing global commands deleted.');
+
+
+        console.log(`Registering ${globalCommandsData.length} new global commands.`);
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: globalCommandsData });
         console.log('Global commands successfully registered.');
 
@@ -3246,7 +3518,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isChatInputCommand()) {
-        const isEphemeralCommand = interaction.commandName === 'echo' || interaction.commandName === 'auth'; 
+        const isEphemeralCommand = interaction.commandName === 'echo' || interaction.commandName === 'auth' || interaction.commandName === 'clear-guild-commands'; // clear-guild-commandsもephemeralに
         await interaction.deferReply({ ephemeral: isEphemeralCommand }).catch(error => {
             console.error("Failed to defer reply:", error);
             return;
