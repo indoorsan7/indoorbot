@@ -2594,7 +2594,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
 };
 client.commands.set(companyCommand.data.name, companyCommand);
 
-// === Stock Command (modified to be global) ===
+// === Stock Command (テキストベースグラフに修正) ===
 const stockCommand = {
     data: new SlashCommandBuilder()
         .setName('stock')
@@ -2695,7 +2695,7 @@ const stockCommand = {
                     { name: '/stock remove <会社名> <株数> <ユーザー>', value: '管理者のみ、指定したユーザーから会社の株を削除します。', inline: false },
                     { name: '/stock buy <会社名> <株数>', value: '会社の株を購入します。', inline: false },
                     { name: '/stock sell <会社名> <株数>', value: '会社の株を売却します。', inline: false },
-                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移をグラフで表示します。', inline: false }, // 説明を更新
+                    { name: '/stock info <会社名>', value: '指定した会社の現在の株価と過去1時間の推移を簡易グラフで表示します。', inline: false }, // 説明を更新
                 )
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
@@ -2844,262 +2844,49 @@ const stockCommand = {
                 return interaction.editReply({ content: `会社「${targetCompany.name}」の株価情報が見つかりませんでした。` });
             }
 
-            // グラフデータをHTMLに埋め込むためのJSON文字列を生成
-            const graphData = {
-                companyName: targetCompany.name,
-                currentPrice: stockData.currentPrice,
-                priceHistory: stockData.priceHistory.sort((a, b) => a.timestamp - b.timestamp)
-            };
+            const priceHistory = stockData.priceHistory.sort((a, b) => a.timestamp - b.timestamp);
+            let chart = '';
+            if (priceHistory.length > 1) {
+                const minPrice = Math.min(...priceHistory.map(entry => entry.price));
+                const maxPrice = Math.max(...priceHistory.map(entry => entry.price));
+                const range = maxPrice - minPrice;
 
-            // HTMLコンテンツを動的に生成
-            const htmlContent = `
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${targetCompany.name} 株価推移グラフ</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f0f4f8;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-        .container {
-            background-color: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
-            padding: 24px;
-            width: 100%;
-            max-width: 800px;
-            box-sizing: border-box;
-            text-align: center;
-        }
-        canvas {
-            background-color: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            display: block;
-            margin: 20px auto 0;
-            width: 100%;
-            height: 350px;
-        }
-        .title {
-            font-size: 1.875rem;
-            font-weight: 700;
-            color: #1a202c;
-            margin-bottom: 16px;
-        }
-        .current-price {
-            font-size: 1.25rem;
-            color: #2d3748;
-            margin-bottom: 12px;
-        }
-        .info-text {
-            font-size: 0.875rem;
-            color: #718096;
-            margin-top: 16px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1 class="title" id="company-name">会社名: データの読み込み中...</h1>
-        <p class="current-price" id="current-price">現在の株価: ---</p>
-        <canvas id="stockChart"></canvas>
-        <p class="info-text">過去1時間の株価推移 (10分ごと)</p>
-    </div>
+                const chartHeight = 5; // テキストグラフの高さ
+                let grid = Array(chartHeight).fill(0).map(() => Array(priceHistory.length).fill('─')); // 初期化を横線に
 
-    <script>
-        const canvas = document.getElementById('stockChart');
-        const ctx = canvas.getContext('2d');
-        const companyNameElement = document.getElementById('company-name');
-        const currentPriceElement = document.getElementById('current-price');
+                priceHistory.forEach((entry, index) => {
+                    const priceNormalized = range === 0 ? 0 : (entry.price - minPrice) / range;
+                    const chartPosition = Math.floor(priceNormalized * (chartHeight - 1));
+                    grid[chartHeight - 1 - chartPosition][index] = '●'; // ポイントをプロット
+                });
 
-        let animationFrameId = null;
-
-        function drawChart(priceHistory, currentPrice, companyName) {
-            const dpr = window.devicePixelRatio || 1;
-            const clientWidth = canvas.clientWidth;
-            const clientHeight = canvas.clientHeight;
-            
-            canvas.width = clientWidth * dpr;
-            canvas.height = clientHeight * dpr;
-            ctx.scale(dpr, dpr);
-
-            ctx.clearRect(0, 0, clientWidth, clientHeight);
-
-            if (!priceHistory || priceHistory.length < 2) {
-                ctx.font = '16px Inter';
-                ctx.fillStyle = '#4a5568';
-                ctx.textAlign = 'center';
-                ctx.fillText('過去1時間のデータが不足しています。', clientWidth / 2, clientHeight / 2);
-                ctx.fillText(\`現在の価格: \${currentPrice.toLocaleString()} いんコイン\`, clientWidth / 2, clientHeight / 2 + 25);
-                return;
-            }
-
-            const padding = 30;
-            const chartWidth = clientWidth - padding * 2;
-            const chartHeight = clientHeight - padding * 2;
-
-            const allPrices = priceHistory.map(entry => entry.price);
-            const minPrice = Math.min(...allPrices);
-            const maxPrice = Math.max(...allPrices);
-            const priceRange = maxPrice - minPrice;
-
-            const numYLabels = 5;
-            for (let i = 0; i <= numYLabels; i++) {
-                const y = padding + chartHeight * (i / numYLabels);
-                const priceLabel = minPrice + priceRange * (1 - (i / numYLabels));
-                ctx.fillStyle = '#718096';
-                ctx.font = '12px Inter';
-                ctx.textAlign = 'right';
-                ctx.fillText(Math.round(priceLabel).toLocaleString(), padding - 5, y + 4);
-
-                ctx.strokeStyle = '#e2e8f0';
-                ctx.beginPath();
-                ctx.moveTo(padding, y);
-                ctx.lineTo(clientWidth - padding, y);
-                ctx.stroke();
-            }
-
-            priceHistory.forEach((entry, index) => {
-                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
-                const date = new Date(entry.timestamp);
-                const timeLabel = \`\${date.getHours().toString().padStart(2, '0')}:\${date.getMinutes().toString().padStart(2, '0')}\`;
-                ctx.fillStyle = '#718096';
-                ctx.font = '12px Inter';
-                ctx.textAlign = 'center';
-                ctx.fillText(timeLabel, x, clientHeight - padding + 20);
-
-                ctx.strokeStyle = '#e2e8f0';
-                ctx.beginPath();
-                ctx.moveTo(x, padding);
-                ctx.lineTo(x, clientHeight - padding);
-                ctx.stroke();
-            });
-
-            ctx.beginPath();
-            ctx.strokeStyle = '#4299e1';
-            ctx.lineWidth = 2;
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
-
-            priceHistory.forEach((entry, index) => {
-                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
-                const y = padding + chartHeight - ((entry.price - minPrice) / priceRange) * chartHeight;
-
-                if (index === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
+                // グリッドを文字列に変換
+                chart = '```ansi\n'; // ANSIエスケープコードを使って色付け
+                for(let i = 0; i < chartHeight; i++) {
+                    for (let j = 0; j < priceHistory.length; j++) {
+                         if (grid[i][j] === '●') {
+                            chart += '\x1b[34m●\x1b[0m'; // 青色
+                        } else {
+                            chart += '─';
+                        }
+                    }
+                    chart += '\n';
                 }
-            });
-            ctx.stroke();
-
-            priceHistory.forEach((entry, index) => {
-                const x = padding + (index / (priceHistory.length - 1)) * chartWidth;
-                const y = padding + chartHeight - ((entry.price - minPrice) / priceRange) * chartHeight;
-                ctx.fillStyle = '#4299e1';
-                ctx.beginPath();
-                ctx.arc(x, y, 4, 0, Math.PI * 2);
-                ctx.fill();
-            });
-        }
-
-        function resizeCanvasAndDraw() {
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
+                chart += '```\n';
+                chart += `現在の価格: **${stockData.currentPrice.toLocaleString()}** いんコイン\n`;
+                chart += `最低価格: **${minPrice.toLocaleString()}** いんコイン / 最高価格: **${maxPrice.toLocaleString()}** いんコイン`;
+            } else if (priceHistory.length === 1) {
+                chart = `過去1時間のデータが不足しています。現在の価格: **${stockData.currentPrice.toLocaleString()}** いんコイン`;
+            } else {
+                chart = '現在、株価履歴データがありません。';
             }
-            animationFrameId = requestAnimationFrame(() => {
-                canvas.style.width = '100%';
-                canvas.style.height = '350px';
-
-                if (window.currentStockData) {
-                    companyNameElement.textContent = \`会社名: \${window.currentStockData.companyName}\`;
-                    currentPriceElement.textContent = \`現在の株価: \${window.currentStockData.currentPrice.toLocaleString()} いんコイン\`;
-                    drawChart(window.currentStockData.priceHistory, window.currentStockData.currentPrice, window.currentStockData.companyName);
-                } else {
-                    companyNameElement.textContent = \`会社名: データがありません\`;
-                    currentPriceElement.textContent = \`現在の株価: ---\`;
-                    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-                    ctx.font = '16px Inter';
-                    ctx.fillStyle = '#4a5568';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('データをロードしてください。', canvas.clientWidth / 2, canvas.clientHeight / 2);
-                }
-            });
-        }
-        
-        window.addEventListener('load', () => {
-            window.addEventListener('resize', resizeCanvasAndDraw);
-            resizeCanvasAndDraw();
-        });
-
-        window.updateStockChart = function(data) {
-            window.currentStockData = data;
-            resizeCanvasAndDraw();
-        };
-
-        // 初期データが存在する場合、ロード時に描画
-        if (typeof window.initialStockData !== 'undefined') {
-            window.updateStockChart(window.initialStockData);
-        }
-    </script>
-    <script>
-        // このスクリプトブロックはボットによって動的に挿入されるデータ用です。
-        // ここにJSONデータが埋め込まれます。
-        window.initialStockData = ${JSON.stringify(graphData)};
-        // ページロード後に初期データを描画するために、updateStockChartを呼び出します。
-        window.addEventListener('load', () => {
-            if (window.initialStockData) {
-                window.updateStockChart(window.initialStockData);
-            }
-        });
-    </script>
-</body>
-</html>
-            `;
-
-            // Canvas Immersive Document API を使用して新しいグラフを作成
-            const createImmersiveResponse = await fetch('/api/v1/immersives', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    type: 'code',
-                    title: `${targetCompany.name} 株価推移グラフ`,
-                    content: htmlContent,
-                    share_mode: 'view' // 共有可能モードで作成
-                })
-            });
-
-            if (!createImmersiveResponse.ok) {
-                console.error('Failed to create immersive document:', createImmersiveResponse.status, await createImmersiveResponse.text());
-                return interaction.editReply({ content: '株価グラフの作成に失敗しました。', ephemeral: true });
-            }
-
-            const immersiveResult = await createImmersiveResponse.json();
-            const graphUrl = immersiveResult.share_url; // 作成されたimmersivesのURLを取得
 
             const embed = new EmbedBuilder()
-                .setTitle(`📈 ${targetCompany.name} の株価情報`)
+                .setTitle(`📈 会社「${targetCompany.name}」の株価情報`)
                 .setColor('#FFD700')
-                .setDescription(`現在の株価: **${stockData.currentPrice.toLocaleString()} いんコイン**`)
-                .addFields(
-                    { name: '過去1時間の推移グラフ', value: `[こちらをクリックしてグラフを見る](${graphUrl})`, inline: false }
-                )
+                .setDescription(chart) // グラフを直接Embedのdescriptionに設定
                 .setTimestamp()
                 .setFooter({ text: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() });
-
             await interaction.editReply({ embeds: [embed] });
         }
     },
