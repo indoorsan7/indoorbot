@@ -8,6 +8,9 @@ import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } fro
 // Chart.jsの画像生成に必要なライブラリをインポート
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 
+// dotenvをインポートして使用
+require('dotenv').config();
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
