@@ -146,7 +146,7 @@ const jobChangeCosts = new Map([
 const authChallenges = new Map(); // 認証チャレンジ用（一時データ）
 const ticketPanelsConfig = new Map(); // チケットパネル設定用（一時データ）
 
-// === Firestore Helper Functions (GuildIdを削除) ===
+// === Firestore Helper Functions ===
 
 // ユーザーデータ (グローバル)
 const getUserDocRef = (discordUserId) => {
@@ -187,7 +187,7 @@ const getStockDocRef = (companyId) => {
     return doc(collection(db, `artifacts/${appId}/company_stocks`), companyId);
 };
 
-// チャンネル報酬データ (ギルド固有) - この関数のみguildIdを残す
+// チャンネル報酬データ (ギルド固有)
 const getChannelRewardDocRef = (guildId, channelId) => {
     if (!db || firebaseAuthUid === 'anonymous' || !guildId || guildId === '') {
         console.warn('Firestore instance, authenticated UID, or guildId is not ready. Channel reward data operations might not persist.');
@@ -298,7 +298,7 @@ async function updateUserDataField(discordUserId, key, value) {
     }
 }
 
-// === User Data Getters/Setters (modified to be global) ===
+// === User Data Getters/Setters ===
 async function getCoins(userId) {
     const data = await getUserData(userId);
     return data.balances;
@@ -409,7 +409,7 @@ async function addUserStocks(userId, companyId, amount) {
     return data.stocks[companyId];
 }
 
-// === Company Data Functions (modified to be global) ===
+// === Company Data Functions ===
 async function getCompanyData(companyId) {
     if (companyDataCache.has(companyId)) {
         return companyDataCache.get(companyId);
@@ -519,7 +519,7 @@ async function getAllCompanies() {
 }
 
 
-// === Stock Data Functions (modified to be global) ===
+// === Stock Data Functions ===
 async function getStockData(companyId) {
     if (stockDataCache.has(companyId)) {
         return stockDataCache.get(companyId);
@@ -820,7 +820,7 @@ async function syncAllDataFromFirestore() {
 }
 
 
-// === Stock Price Fluctuation (modified to be global) ===
+// === Stock Price Fluctuation ===
 const STOCK_UPDATE_INTERVAL_MS = 10 * 60 * 1000; // 10分
 const STOCK_PRICE_MIN = 650;
 const STOCK_PRICE_MAX = 1500;
@@ -894,8 +894,9 @@ async function applyDailyCompanyPayouts() {
             const ownerId = company.ownerId;
             const companyName = company.name;
 
-            // 維持費を計算: 日給 × 人数 + 300,000
-            const maintenanceFee = (dailySalary * members.length) + 300000;
+            // 維持費を計算: 40万円 × (人数 × 日給)
+            // この計算式は「基本維持費40万円 + 人数 * 日給」と解釈します
+            const maintenanceFee = 400000 + (dailySalary * members.length); // 変更された計算式
             const totalPayoutNeeded = (dailySalary * members.length); // 純粋な日給の合計
 
             console.log(`Company ${companyName} (${company.id}): Daily salary: ${dailySalary}, Members: ${members.length}, Maintenance Fee: ${maintenanceFee}, Current Budget: ${company.budget}`);
@@ -955,7 +956,8 @@ async function applyDailyCompanyPayouts() {
             // 各メンバーに日給を付与
             for (const member of members) {
                 await addCoins(member.id, dailySalary);
-                // メンバーに日給支払いをDM通知
+                // 日給支払い時のDM通知を削除しました
+                /*
                 const memberUser = await client.users.fetch(member.id).catch(() => null);
                 if (memberUser) {
                     const embed = new EmbedBuilder()
@@ -970,6 +972,7 @@ async function applyDailyCompanyPayouts() {
                         console.error(`Failed to send daily salary DM to member ${member.id}:`, dmError);
                     }
                 }
+                */
             }
             console.log(`Company ${companyName} (${company.id}) paid ${totalPayoutNeeded} to its members.`);
             await saveCompanyDataToFirestore(company.id, { ...company, lastPayoutTime: now }); // 成功しても失敗しても時間を更新
@@ -2302,7 +2305,7 @@ ${password ? 'パスワードが設定されました。' : 'パスワードは�
             const ownerDMEmbed = new EmbedBuilder()
                 .setTitle('会社について')
                 .setDescription(`会社の作成おめでとうございます！会社は毎日**夜9時**に維持費が引き出されます。
-維持費は日給も含まれ、**日給×人数 + 300000**コインが引き落とされます。
+維持費は日給も含まれ、**日給×人数 + 400000**コインが引き落とされます。
 /company depositでコインを入れて維持費を払いましょう！
 日給はもちろん会社の人に支払われます。`)
                 .setColor('#0099ff')
