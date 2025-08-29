@@ -1,3 +1,5 @@
+// dotenvをインポートして使用
+import 'dotenv/config';
 import { Client, Collection, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, REST, Routes, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ActivityType, AttachmentBuilder } from 'discord.js'; // AttachmentBuilderを追加
 import http from 'http';
 // FirebaseのインポートをESモジュール形式に修正
@@ -7,9 +9,6 @@ import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc } fro
 
 // Chart.jsの画像生成に必要なライブラリをインポート
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
-
-// dotenvをインポートして使用
-import 'dotenv/config';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
