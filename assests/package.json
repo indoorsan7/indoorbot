@@ -21,8 +21,6 @@
     "discord.js": "^14.15.3",
     "firebase": "^10.12.3",
     "http": "^0.0.1-security"
-  },
-  "devDependencies": {
     "dotenv": "^16.4.5"
   }
 }
